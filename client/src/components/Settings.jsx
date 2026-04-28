@@ -1,0 +1,445 @@
+import React, { useState, useEffect } from 'react';
+import { Save, Plus, Trash2, CheckCircle, XCircle, RefreshCw, Activity, Edit2 } from 'lucide-react';
+import axios from 'axios';
+
+export default function Settings() {
+  const [settings, setSettings] = useState({
+    auth_enabled: false,
+    admin_user: '',
+    admin_password: '',
+    has_password: false,
+    qbit_url: '',
+    qbit_user: '',
+    qbit_password: '',
+    has_qbit_pass: false
+  });
+
+  const [instances, setInstances] = useState([]);
+  
+  const [newInstance, setNewInstance] = useState({
+    type: 'radarr',
+    name: '',
+    url_internal: '',
+    url_external: '',
+    api_key: ''
+  });
+
+  const [saveStatus, setSaveStatus] = useState(null); // 'success', 'error', null
+  const [qbitTestStatus, setQbitTestStatus] = useState(null); // 'loading', 'success', 'error', null
+  const [crossSeedTestStatus, setCrossSeedTestStatus] = useState(null); // 'loading', 'success', 'error', null
+  const [arrTestStatus, setArrTestStatus] = useState(null); // 'loading', 'success', 'error', null
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // id of instance to delete
+  const [editingInstance, setEditingInstance] = useState(null);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      const [settingsRes, instancesRes] = await Promise.all([
+        axios.get('/settings'),
+        axios.get('/instances')
+      ]);
+      setSettings(settingsRes.data);
+      setInstances(instancesRes.data);
+    } catch (error) {
+      console.error("Failed to fetch settings", error);
+    }
+  };
+
+  const handleSettingsSave = async (e) => {
+    e.preventDefault();
+    setSaveStatus(null);
+    try {
+      await axios.post('/settings', settings);
+      setSaveStatus('success');
+      fetchData();
+      setTimeout(() => setSaveStatus(null), 3000);
+    } catch (error) {
+      setSaveStatus('error');
+      setTimeout(() => setSaveStatus(null), 3000);
+    }
+  };
+
+  const testQbitConnection = async () => {
+    setQbitTestStatus('loading');
+    try {
+      await axios.post('/test/qbit', {
+        url: settings.qbit_url,
+        username: settings.qbit_user,
+        password: settings.qbit_password || '' // Empty if just using saved pass
+      });
+      setQbitTestStatus('success');
+    } catch (error) {
+      setQbitTestStatus('error');
+    }
+    setTimeout(() => setQbitTestStatus(null), 5000);
+  };
+
+  const testCrossSeedConnection = async () => {
+    setCrossSeedTestStatus('loading');
+    try {
+      await axios.post('/test/cross-seed', {
+        url: settings.cross_seed_url,
+        apiKey: settings.cross_seed_api_key
+      });
+      setCrossSeedTestStatus('success');
+    } catch (error) {
+      setCrossSeedTestStatus('error');
+    }
+    setTimeout(() => setCrossSeedTestStatus(null), 5000);
+  };
+
+  const testArrConnection = async () => {
+    setArrTestStatus('loading');
+    try {
+      await axios.post('/test/arr', {
+        type: newInstance.type,
+        url: newInstance.url_internal,
+        apiKey: newInstance.api_key
+      });
+      setArrTestStatus('success');
+    } catch (error) {
+      setArrTestStatus('error');
+    }
+    setTimeout(() => setArrTestStatus(null), 5000);
+  };
+
+  const [instanceTests, setInstanceTests] = useState({}); // { id: 'loading' | 'success' | 'error' }
+
+  const testSavedInstance = async (inst) => {
+    setInstanceTests(prev => ({ ...prev, [inst.id]: 'loading' }));
+    try {
+      await axios.post('/test/arr', {
+        type: inst.type,
+        url: inst.url_internal,
+        apiKey: inst.api_key
+      });
+      setInstanceTests(prev => ({ ...prev, [inst.id]: 'success' }));
+    } catch (error) {
+      setInstanceTests(prev => ({ ...prev, [inst.id]: 'error' }));
+    }
+    setTimeout(() => {
+      setInstanceTests(prev => {
+        const next = { ...prev };
+        delete next[inst.id];
+        return next;
+      });
+    }, 5000);
+  };
+
+  const handleAddInstance = async (e) => {
+    e.preventDefault();
+    try {
+      await axios.post('/instances', newInstance);
+      setNewInstance({ type: 'radarr', name: '', url_internal: '', url_external: '', api_key: '' });
+      fetchData();
+      // Visual feedback via a temporary state if needed, but the list update is usually enough
+    } catch (error) {
+      setSaveStatus('error');
+    }
+  };
+
+  const handleUpdateInstance = async (e) => {
+    e.preventDefault();
+    try {
+      await axios.put(`/instances/${editingInstance.id}`, editingInstance);
+      setEditingInstance(null);
+      fetchData();
+    } catch (error) {
+      alert("Failed to update instance");
+    }
+  };
+
+  const handleDeleteInstance = async (id) => {
+    try {
+      await axios.delete(`/instances/${id}`);
+      setDeleteConfirm(null);
+      fetchData();
+    } catch (error) {
+      setSaveStatus('error');
+    }
+  };
+
+  return (
+    <div className="grid-3">
+      
+      {/* Global Settings */}
+      <div className="glass-panel">
+        <h2 className="flex items-center gap-2"><Save size={24} /> Global Settings</h2>
+        
+        <form onSubmit={handleSettingsSave}>
+          <div className="mb-6">
+            <h3>Authentication</h3>
+            <p className="mb-4" style={{ fontSize: '0.875rem' }}>If enabled, a login is required.</p>
+            
+            <div className="form-group flex items-center gap-2">
+              <input 
+                type="checkbox" 
+                id="auth_enabled"
+                checked={settings.auth_enabled} 
+                onChange={(e) => setSettings({...settings, auth_enabled: e.target.checked})} 
+                style={{ width: 'auto' }}
+              />
+              <label htmlFor="auth_enabled" style={{ margin: 0 }}>Enable Authentication</label>
+            </div>
+
+            {settings.auth_enabled && (
+              <>
+                <div className="form-group">
+                  <label>Admin Username</label>
+                  <input type="text" value={settings.admin_user} onChange={e => setSettings({...settings, admin_user: e.target.value})} />
+                </div>
+                <div className="form-group">
+                  <label>Admin Password {settings.has_password && '(Keep empty)'}</label>
+                  <input type="password" placeholder={settings.has_password ? "••••••••" : ""} onChange={e => setSettings({...settings, admin_password: e.target.value})} />
+                </div>
+              </>
+            )}
+          </div>
+
+          <button 
+            type="submit" 
+            className={`btn btn-primary ${saveStatus === 'success' ? 'btn-success-animate' : ''}`} 
+            style={{ width: '100%' }}
+          >
+            <Save size={18} /> Save Auth Settings
+          </button>
+        </form>
+      </div>
+      
+      {/* Torrent Settings (qBit + cross-seed) */}
+      <div className="glass-panel">
+        <h2 className="flex items-center gap-2">🚀 Torrent Settings</h2>
+        
+        <form onSubmit={handleSettingsSave}>
+          <div className="mb-6">
+            <h3>qBittorrent</h3>
+            <div className="form-group">
+              <label>URL (Internal)</label>
+              <input type="url" required value={settings.qbit_url} onChange={e => setSettings({...settings, qbit_url: e.target.value})} placeholder="http://qbittorrent:8080" />
+            </div>
+            <div className="form-group">
+              <label>Username</label>
+              <input type="text" required value={settings.qbit_user} onChange={e => setSettings({...settings, qbit_user: e.target.value})} />
+            </div>
+            <div className="form-group">
+              <label>Password {settings.has_qbit_pass && '(Keep empty)'}</label>
+              <input type="password" placeholder={settings.has_qbit_pass ? "••••••••" : ""} onChange={e => setSettings({...settings, qbit_password: e.target.value})} />
+            </div>
+            
+            <button 
+              type="button" 
+              onClick={testQbitConnection} 
+              className={`btn btn-secondary ${qbitTestStatus === 'success' ? 'status-success' : ''} ${qbitTestStatus === 'error' ? 'status-error' : ''}`} 
+              style={{ width: '100%' }}
+              disabled={qbitTestStatus === 'loading'}
+            >
+              {qbitTestStatus === 'loading' ? <RefreshCw size={18} className="animate-spin" /> : 
+               qbitTestStatus === 'success' ? <CheckCircle size={18} /> :
+               qbitTestStatus === 'error' ? <XCircle size={18} /> :
+               <Activity size={18} />}
+              Test qBittorrent
+            </button>
+          </div>
+
+          <div className="mb-6" style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '1.5rem' }}>
+            <h3>cross-seed</h3>
+            <div className="form-group">
+              <label>URL</label>
+              <input 
+                type="url" 
+                value={settings.cross_seed_url || ''} 
+                onChange={e => setSettings({...settings, cross_seed_url: e.target.value})} 
+                placeholder="http://192.168.1.100:2468"
+              />
+            </div>
+            <div className="form-group">
+              <label>API Key</label>
+              <input 
+                type="password" 
+                value={settings.cross_seed_api_key || ''} 
+                onChange={e => setSettings({...settings, cross_seed_api_key: e.target.value})} 
+                placeholder="cross-seed api-key"
+              />
+            </div>
+          </div>
+
+          <button 
+            type="button" 
+            onClick={testCrossSeedConnection} 
+            className={`btn btn-secondary mb-4 ${crossSeedTestStatus === 'success' ? 'status-success' : ''} ${crossSeedTestStatus === 'error' ? 'status-error' : ''}`} 
+            style={{ width: '100%' }}
+            disabled={crossSeedTestStatus === 'loading'}
+          >
+            {crossSeedTestStatus === 'loading' ? <RefreshCw size={18} className="animate-spin" /> : 
+             crossSeedTestStatus === 'success' ? <CheckCircle size={18} /> :
+             crossSeedTestStatus === 'error' ? <XCircle size={18} /> :
+             <Activity size={18} />}
+            Test cross-seed
+          </button>
+
+          <button 
+            type="submit" 
+            className={`btn btn-primary ${saveStatus === 'success' ? 'btn-success-animate' : ''}`}
+            style={{ width: '100%' }}
+          >
+            <Save size={18} /> Save Torrent Settings
+          </button>
+        </form>
+      </div>
+
+      {/* Instances Section */}
+      <div className="flex flex-col gap-4">
+        <div className="glass-panel">
+          <h2 className="flex items-center gap-2"><Plus size={24} /> Add Instance</h2>
+          <form onSubmit={handleAddInstance}>
+            <div className="form-group">
+              <label>Type</label>
+              <select value={newInstance.type} onChange={e => setNewInstance({...newInstance, type: e.target.value})}>
+                <option value="radarr">Radarr</option>
+                <option value="sonarr">Sonarr</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Name</label>
+              <input type="text" required value={newInstance.name} onChange={e => setNewInstance({...newInstance, name: e.target.value})} />
+            </div>
+            <div className="form-group">
+              <label>URL (Internal)</label>
+              <input type="url" required value={newInstance.url_internal} onChange={e => setNewInstance({...newInstance, url_internal: e.target.value})} placeholder="http://radarr:7878" />
+            </div>
+            <div className="form-group">
+              <label>URL (External/Display)</label>
+              <input type="url" required value={newInstance.url_external} onChange={e => setNewInstance({...newInstance, url_external: e.target.value})} placeholder="https://radarr.yourdomain.com" />
+            </div>
+            <div className="form-group">
+              <label>API Key</label>
+              <input type="password" required value={newInstance.api_key} onChange={e => setNewInstance({...newInstance, api_key: e.target.value})} />
+            </div>
+
+            <div className="flex gap-2">
+              <button 
+                type="button" 
+                onClick={testArrConnection} 
+                className={`btn btn-secondary ${arrTestStatus === 'success' ? 'status-success' : ''} ${arrTestStatus === 'error' ? 'status-error' : ''}`} 
+                style={{ flex: 1 }}
+                disabled={arrTestStatus === 'loading'}
+              >
+                {arrTestStatus === 'loading' ? <RefreshCw size={18} className="animate-spin" /> : 
+                 arrTestStatus === 'success' ? <CheckCircle size={18} /> :
+                 arrTestStatus === 'error' ? <XCircle size={18} /> :
+                 <Activity size={18} />}
+                Test
+              </button>
+              <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>
+                <Plus size={18} /> Add
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div className="glass-panel">
+          <h3>Saved Instances</h3>
+          <div className="flex flex-col gap-2 mt-4">
+            {instances.length === 0 ? (
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>No instances added yet.</p>
+            ) : (
+              instances.map(inst => (
+                <div key={inst.id} className="glass-card flex justify-between items-center" style={{ padding: '0.75rem' }}>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '1rem' }}>{inst.name}</h4>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{inst.type.toUpperCase()}</span>
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => testSavedInstance(inst)} 
+                      className={`btn btn-secondary btn-sm ${instanceTests[inst.id] === 'success' ? 'status-success' : ''} ${instanceTests[inst.id] === 'error' ? 'status-error' : ''}`}
+                      disabled={instanceTests[inst.id] === 'loading'}
+                      title="Test Connection"
+                    >
+                      {instanceTests[inst.id] === 'loading' ? <RefreshCw size={14} className="animate-spin" /> : <Activity size={14} />}
+                    </button>
+                    <button 
+                      onClick={() => setEditingInstance(inst)} 
+                      className="btn btn-secondary btn-sm"
+                      title="Edit Instance"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                    <button onClick={() => setDeleteConfirm(inst.id)} className="btn btn-danger btn-sm" title="Delete Instance">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+      {/* Edit Instance Modal Overlay */}
+      {editingInstance && (
+        <div className="modal-overlay">
+          <div className="glass-panel modal-content">
+            <h2 className="mb-4">Edit Instance: {editingInstance.name}</h2>
+            <form onSubmit={handleUpdateInstance}>
+              <div className="form-group">
+                <label>Type</label>
+                <select value={editingInstance.type} onChange={e => setEditingInstance({...editingInstance, type: e.target.value})}>
+                  <option value="radarr">Radarr</option>
+                  <option value="sonarr">Sonarr</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Name</label>
+                <input type="text" required value={editingInstance.name} onChange={e => setEditingInstance({...editingInstance, name: e.target.value})} />
+              </div>
+              <div className="form-group">
+                <label>URL (Internal)</label>
+                <input type="url" required value={editingInstance.url_internal} onChange={e => setEditingInstance({...editingInstance, url_internal: e.target.value})} />
+              </div>
+              <div className="form-group">
+                <label>URL (External/Display)</label>
+                <input type="url" required value={editingInstance.url_external} onChange={e => setEditingInstance({...editingInstance, url_external: e.target.value})} />
+              </div>
+              <div className="form-group">
+                <label>API Key</label>
+                <input type="password" required value={editingInstance.api_key} onChange={e => setEditingInstance({...editingInstance, api_key: e.target.value})} />
+              </div>
+              <div className="flex gap-4 mt-6">
+                <button type="button" onClick={() => setEditingInstance(null)} className="btn btn-secondary" style={{ flex: 1 }}>Cancel</button>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Overlay */}
+      {deleteConfirm && (
+        <div className="modal-overlay">
+          <div className="glass-panel" style={{ width: '100%', maxWidth: '400px', textAlign: 'center' }}>
+            <h2 className="mb-4">Are you sure?</h2>
+            <p className="mb-6">Do you really want to delete this instance?</p>
+            <div className="flex gap-4">
+              <button onClick={() => setDeleteConfirm(null)} className="btn btn-secondary" style={{ flex: 1 }}>Cancel</button>
+              <button 
+                onClick={async () => {
+                  await axios.delete(`/instances/${deleteConfirm}`);
+                  setDeleteConfirm(null);
+                  fetchData();
+                }} 
+                className="btn btn-danger" 
+                style={{ flex: 1 }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

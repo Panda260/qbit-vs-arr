@@ -1,0 +1,9 @@
+services:
+  qbit-vs-arr:
+    image: ghcr.io/panda260/qbit-vs-arr:latest
+    container_name: qbit-vs-arr
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
