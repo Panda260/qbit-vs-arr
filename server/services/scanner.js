@@ -115,7 +115,16 @@ function getSanitizedVariations(aliases) {
 function matchSanitized(sanitizedAliases, sTorrentName) {
   if (!sTorrentName) return false;
   for (const sAlias of sanitizedAliases) {
-    if (sTorrentName.includes(sAlias) || sAlias.includes(sTorrentName)) return true;
+    if (sAlias === sTorrentName) return true; // Exact match is always valid
+    
+    if (sTorrentName.includes(sAlias) || sAlias.includes(sTorrentName)) {
+      // Prevent generic file/folder names from matching specific release names.
+      // If the length difference is too large (e.g. 'enolaholmes2' vs 'enolaholmes21080ph265hdr...'), it's a false positive.
+      const diff = Math.abs(sAlias.length - sTorrentName.length);
+      if (diff <= 25) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -183,13 +192,16 @@ async function scanMedia(sendEvent) {
           await new Promise(resolve => setImmediate(resolve));
         }
 
-        const aliases = [
-          movie.title,
-          movie.originalTitle,
-          movie.folderName,
+        const fileAliases = [
           movie.movieFile ? movie.movieFile.sceneName : null,
           movie.movieFile ? movie.movieFile.relativePath : null
-        ];
+        ].filter(Boolean);
+
+        // If we have a specific file/scene name, use only that for matching to avoid title-based mismatches
+        // (e.g., matching a 1080p movie in Radarr with a 4k torrent in qBit because they share the same title)
+        const aliases = fileAliases.length > 0 
+          ? fileAliases 
+          : [movie.title, movie.originalTitle, movie.folderName];
 
         const sanitizedAliases = getSanitizedVariations(aliases);
 
@@ -250,11 +262,14 @@ async function scanMedia(sendEvent) {
           
           const sNum = season.seasonNumber;
           
-          const aliases = [
-            show.title,
-            show.originalTitle,
-            show.path.split(/[\\/]/).pop()
-          ];
+          const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
+          const seasonSceneNames = Array.from(new Set(seasonFiles.map(f => f.sceneName).filter(Boolean)));
+          const seasonPaths = Array.from(new Set(seasonFiles.map(f => f.relativePath).filter(Boolean)));
+
+          // Use specific episode filenames/scene names if available, otherwise fallback to show title
+          const aliases = (seasonSceneNames.length > 0 || seasonPaths.length > 0)
+            ? [...seasonSceneNames, ...seasonPaths]
+            : [show.title, show.originalTitle, show.path.split(/[\\/]/).pop()];
 
           const sanitizedAliases = getSanitizedVariations(aliases);
 
