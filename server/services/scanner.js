@@ -192,6 +192,7 @@ async function scanMedia(sendEvent) {
           arrUrl: `${instance.url_external}/movie/${movie.titleSlug}`,
           path: actualPath,
           releaseName: releaseName,
+          fileName: movie.movieFile ? movie.movieFile.relativePath : '',
           qbitTags: Array.from(mediaTags),
           inQbit: matchingTorrents.length > 0
         });

@@ -141,10 +141,11 @@ export default function Dashboard() {
         const pathLower = item.path ? item.path.toLowerCase() : '';
         const releaseLower = item.releaseName ? item.releaseName.toLowerCase() : '';
         const titleLower = item.title ? item.title.toLowerCase() : '';
+        const fileLower = item.fileName ? item.fileName.toLowerCase() : '';
         
         const shouldIgnore = settings.ignored_keywords.some(keyword => {
           const kw = keyword.toLowerCase();
-          return pathLower.includes(kw) || releaseLower.includes(kw) || titleLower.includes(kw);
+          return pathLower.includes(kw) || releaseLower.includes(kw) || titleLower.includes(kw) || fileLower.includes(kw);
         });
         if (shouldIgnore) return false;
       }
