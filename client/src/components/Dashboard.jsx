@@ -205,6 +205,31 @@ export default function Dashboard() {
     }, 3000);
   };
 
+  const [searchAllProgress, setSearchAllProgress] = useState(null);
+
+  const searchAllCrossSeed = async () => {
+    const itemsToSearch = filteredMedia;
+    if (!itemsToSearch || itemsToSearch.length === 0) return;
+    
+    setSearchAllProgress({ current: 0, total: itemsToSearch.length });
+
+    for (let i = 0; i < itemsToSearch.length; i++) {
+      const item = itemsToSearch[i];
+      setSearchAllProgress({ current: i + 1, total: itemsToSearch.length, currentItem: item.title });
+      
+      try {
+        await axios.post('/cross-seed', { path: item.path });
+      } catch (error) {
+        console.error(`Failed to search ${item.title}:`, error);
+      }
+      
+      // Delay to avoid hitting cross-seed too hard
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    setSearchAllProgress(null);
+  };
+
   return (
     <div>
       <div className="glass-panel mb-4 flex justify-between items-center">
@@ -356,8 +381,40 @@ export default function Dashboard() {
                     ))}
                   </optgroup>
                 </select>
+
+                {displayMode === 'missing' && (
+                  <button 
+                    onClick={searchAllCrossSeed} 
+                    disabled={searchAllProgress !== null}
+                    className="btn btn-primary btn-sm flex items-center gap-2"
+                    style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', whiteSpace: 'nowrap' }}
+                  >
+                    {searchAllProgress ? (
+                      <><RefreshCw size={14} className="animate-spin" /> {searchAllProgress.current} / {searchAllProgress.total}</>
+                    ) : (
+                      <><Search size={14} /> Search All</>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
+            
+            {searchAllProgress && (
+              <div className="glass-panel mb-6 animate-fade-in" style={{ padding: '0.75rem 1.5rem' }}>
+                <div className="flex justify-between items-center mb-2">
+                  <span style={{ fontSize: '0.85rem' }}>Searching cross-seed: <strong>{searchAllProgress.currentItem}</strong></span>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    {Math.round((searchAllProgress.current / searchAllProgress.total) * 100)}%
+                  </span>
+                </div>
+                <div className="progress-container" style={{ height: '4px' }}>
+                  <div 
+                    className="progress-bar" 
+                    style={{ width: `${(searchAllProgress.current / searchAllProgress.total) * 100}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
             
             <div className="media-list">
               {filteredMedia.map(item => (
