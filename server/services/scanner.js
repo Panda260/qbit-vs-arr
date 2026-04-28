@@ -3,23 +3,36 @@ const db = require('./db');
 
 async function getQbitAuthCookie(url, username, password) {
   try {
-    const response = await axios.post(`${url}/api/v2/auth/login`, 
-      `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`, 
+    const cleanUrl = url.replace(/\/$/, '');
+    const params = new URLSearchParams();
+    params.append('username', username);
+    params.append('password', password);
+    
+    const response = await axios.post(`${cleanUrl}/api/v2/auth/login`, params.toString(), 
       {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        headers: { 
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Referer': cleanUrl
+        }
       }
     );
+    
+    if (response.data === 'Fails.') {
+      throw new Error('Invalid username or password (qBittorrent returned Fails)');
+    }
+    
     const cookie = response.headers['set-cookie'];
     if (cookie) return cookie[0].split(';')[0];
     throw new Error('No cookie returned from qBittorrent');
   } catch (error) {
-    throw new Error('Failed to authenticate with qBittorrent: ' + error.message);
+    throw new Error('Failed to authenticate with qBittorrent: ' + (error.response?.data || error.message));
   }
 }
 
 async function getQbitTorrents(url, cookie) {
   try {
-    const response = await axios.get(`${url}/api/v2/torrents/info`, {
+    const cleanUrl = url.replace(/\/$/, '');
+    const response = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
       headers: { Cookie: cookie }
     });
     return response.data;
