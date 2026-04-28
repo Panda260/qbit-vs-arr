@@ -52,6 +52,17 @@ async function getSonarrSeries(instance) {
   }
 }
 
+async function getSonarrEpisodeFiles(instance, seriesId) {
+  try {
+    const response = await axios.get(`${instance.url_internal}/api/v3/episodefile?seriesId=${seriesId}`, {
+      headers: { 'X-Api-Key': instance.api_key }
+    });
+    return response.data || [];
+  } catch (error) {
+    return [];
+  }
+}
+
 function sanitizeString(str) {
   return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
@@ -215,6 +226,11 @@ async function scanMedia(sendEvent) {
 
         if (!show.seasons) continue;
         
+        let episodeFiles = [];
+        try {
+          episodeFiles = await getSonarrEpisodeFiles(instance, show.id);
+        } catch (e) { }
+        
         for (const season of show.seasons) {
           // Only process seasons that have downloaded files
           if (!season.statistics || season.statistics.episodeFileCount === 0) continue;
@@ -244,6 +260,10 @@ async function scanMedia(sendEvent) {
           const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
           const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
 
+          // Extract all filenames for this specific season to allow the blacklist to check every single file
+          const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
+          const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
+
           results.push({
             id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
             title: `${show.title} - Season ${sNum}`,
@@ -252,6 +272,7 @@ async function scanMedia(sendEvent) {
             arrUrl: `${instance.url_external}/series/${show.titleSlug}`,
             path: actualPath,
             releaseName: `${show.path.split(/[\\/]/).pop()} S${String(sNum).padStart(2, '0')}`,
+            fileName: seasonFileNames,
             qbitTags: Array.from(mediaTags),
             inQbit: matchingTorrents.length > 0
           });
