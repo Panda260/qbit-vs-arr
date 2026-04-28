@@ -102,7 +102,15 @@ export default function Dashboard() {
   };
 
   const copyCommand = (item) => {
-    const cmd = `docker exec -it upp upPollo upload --category cross-seed-link --tags manual "${item.path}"`;
+    const cmdTemplate = settings.upload_command || 'docker exec -it upp upPollo upload --category cross-seed-link --tags manual "{path}"';
+    const cmd = cmdTemplate
+      .replace(/{path}/g, item.path || '')
+      .replace(/{title}/g, item.title || '')
+      .replace(/{type}/g, item.type || '')
+      .replace(/{instance}/g, item.instanceName || '')
+      .replace(/{releaseName}/g, item.releaseName || '')
+      .replace(/{fileName}/g, item.fileName || '');
+      
     navigator.clipboard.writeText(cmd);
     setCopiedId(item.id);
     setTimeout(() => setCopiedId(null), 2000);

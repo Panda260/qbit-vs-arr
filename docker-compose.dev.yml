@@ -1,0 +1,10 @@
+services:
+  qbit-vs-arr:
+    build: .
+    image: qbit-vs-arr:dev
+    container_name: qbit-vs-arr-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

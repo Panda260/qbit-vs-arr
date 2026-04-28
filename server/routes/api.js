@@ -45,6 +45,7 @@ router.get('/settings', (req, res) => {
     has_qbit_pass: !!db.getSetting('qbit_password', ''),
     cross_seed_url: db.getSetting('cross_seed_url', ''),
     cross_seed_api_key: db.getSetting('cross_seed_api_key', ''),
+    upload_command: db.getSetting('upload_command', 'docker exec -it upp upPollo upload --category cross-seed-link --tags manual "{path}"'),
     ignored_keywords: JSON.parse(db.getSetting('ignored_keywords', '[]'))
   });
 });
@@ -54,7 +55,7 @@ router.post('/settings', (req, res) => {
     auth_enabled, admin_user, admin_password, 
     qbit_url, qbit_user, qbit_password,
     cross_seed_url, cross_seed_api_key,
-    ignored_keywords
+    ignored_keywords, upload_command
   } = req.body;
   
   if (auth_enabled !== undefined) db.setSetting('auth_enabled', auth_enabled);
@@ -67,6 +68,7 @@ router.post('/settings', (req, res) => {
 
   if (cross_seed_url !== undefined) db.setSetting('cross_seed_url', cross_seed_url);
   if (cross_seed_api_key !== undefined) db.setSetting('cross_seed_api_key', cross_seed_api_key);
+  if (upload_command !== undefined) db.setSetting('upload_command', upload_command);
   
   if (ignored_keywords !== undefined) db.setSetting('ignored_keywords', JSON.stringify(ignored_keywords));
   
