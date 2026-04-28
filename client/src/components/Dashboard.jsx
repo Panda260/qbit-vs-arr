@@ -138,8 +138,14 @@ export default function Dashboard() {
     return mediaItems.filter(item => {
       // 0. Ignore List Filter
       if (settings.ignored_keywords && settings.ignored_keywords.length > 0) {
-        const pathLower = item.path.toLowerCase();
-        const shouldIgnore = settings.ignored_keywords.some(keyword => pathLower.includes(keyword.toLowerCase()));
+        const pathLower = item.path ? item.path.toLowerCase() : '';
+        const releaseLower = item.releaseName ? item.releaseName.toLowerCase() : '';
+        const titleLower = item.title ? item.title.toLowerCase() : '';
+        
+        const shouldIgnore = settings.ignored_keywords.some(keyword => {
+          const kw = keyword.toLowerCase();
+          return pathLower.includes(kw) || releaseLower.includes(kw) || titleLower.includes(kw);
+        });
         if (shouldIgnore) return false;
       }
       // 1. Instance Filter
