@@ -289,7 +289,6 @@ async function scanMedia(sendEvent) {
           const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
 
           // Extract all filenames for this specific season to allow the blacklist to check every single file
-          const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
           const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
 
           results.push({
