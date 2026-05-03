@@ -432,6 +432,20 @@ export default function Dashboard() {
                         }}>
                           {item.type.toUpperCase()}
                         </span>
+                        {item.matchMethod && item.inQbit && (
+                          <span style={{
+                            fontSize: '0.6rem',
+                            padding: '2px 7px',
+                            borderRadius: '12px',
+                            fontWeight: 700,
+                            letterSpacing: '0.05em',
+                            background: item.matchMethod === 'size' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                            color: item.matchMethod === 'size' ? '#fde047' : '#86efac',
+                            border: item.matchMethod === 'size' ? '1px solid rgba(234,179,8,0.3)' : '1px solid rgba(34,197,94,0.3)'
+                          }}>
+                            {item.matchMethod === 'size' ? '📏 SIZE' : '🏷️ NAME'}
+                          </span>
+                        )}
                       </div>
                     </div>
                     

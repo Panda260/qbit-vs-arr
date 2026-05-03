@@ -11,7 +11,8 @@ export default function Settings() {
     qbit_url: '',
     qbit_user: '',
     qbit_password: '',
-    has_qbit_pass: false
+    has_qbit_pass: false,
+    match_mode: 'name_then_size'
   });
 
   const [instances, setInstances] = useState([]);
@@ -206,9 +207,39 @@ export default function Settings() {
           >
             <Save size={18} /> Save Auth Settings
           </button>
+
+          <div className="mb-6" style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '1.5rem', marginTop: '1.5rem' }}>
+            <h3>Matching Mode</h3>
+            <p className="mb-4" style={{ fontSize: '0.875rem' }}>
+              Controls how Arr media is matched against qBittorrent torrents.
+            </p>
+            <div className="form-group">
+              <label htmlFor="match_mode">Strategy</label>
+              <select
+                id="match_mode"
+                value={settings.match_mode || 'name_then_size'}
+                onChange={e => setSettings({ ...settings, match_mode: e.target.value })}
+              >
+                <option value="name_then_size">Name → Size Fallback (Recommended)</option>
+                <option value="name_only">Name Only</option>
+                <option value="size_only">Size Only (.mkv / video files)</option>
+              </select>
+            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+              {(settings.match_mode === 'name_then_size' || !settings.match_mode) && (
+                <span>✅ Matches by name first (fast). Falls back to exact file size for unmatched items. <br />Safe: ambiguous size matches (multiple torrents with same size) are skipped.</span>
+              )}
+              {settings.match_mode === 'name_only' && (
+                <span>⚠️ Name matching only. No size fallback. May miss Cross-Seed duplicates with different names.</span>
+              )}
+              {settings.match_mode === 'size_only' && (
+                <span>📏 Size matching only (video files ≥100MB). Ignores names entirely. Most aggressive – use with caution.</span>
+              )}
+            </div>
+          </div>
         </form>
       </div>
-      
+
       {/* Torrent Settings (qBit + cross-seed) */}
       <div className="glass-panel">
         <h2 className="flex items-center gap-2">🚀 Torrent Settings</h2>

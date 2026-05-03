@@ -1,6 +1,10 @@
 const axios = require('axios');
 const db = require('./db');
 
+// ---------------------------------------------------------------------------
+// qBittorrent helpers
+// ---------------------------------------------------------------------------
+
 async function getQbitAuthCookie(url, username, password) {
   try {
     const cleanUrl = url.replace(/\/$/, '');
@@ -41,6 +45,96 @@ async function getQbitTorrents(url, cookie) {
   }
 }
 
+/**
+ * Fetch the file list for a single torrent.
+ * Returns array of { name, size } objects.
+ */
+async function getQbitTorrentFiles(url, cookie, hash) {
+  try {
+    const cleanUrl = url.replace(/\/$/, '');
+    const response = await axios.get(`${cleanUrl}/api/v2/torrents/files`, {
+      headers: { Cookie: cookie },
+      params: { hash }
+    });
+    return response.data || [];
+  } catch (error) {
+    // Non-fatal: if we can't get files for a torrent, we just skip it
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Size index builder
+// ---------------------------------------------------------------------------
+
+const MKV_MIN_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB – ignore NFOs, samples, subs
+const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|iso)$/i;
+
+/**
+ * Build a Map<fileSizeBytes, torrent[]> from all .mkv / video files across
+ * all qBit torrents.  Torrents whose file list cannot be fetched are skipped.
+ *
+ * We fetch file lists in parallel batches to keep it fast.
+ *
+ * The map value is an array because two different torrents could share the
+ * exact same file size.  We use that to detect ambiguity and refuse a match.
+ */
+async function buildSizeIndex(torrents, url, cookie, sendEvent) {
+  const BATCH_SIZE = 20; // concurrent requests to qBit
+  const sizeIndex = new Map(); // size_bytes => [{ torrent, fileName }]
+
+  sendEvent('progress', { step: `Building size index for ${torrents.length} torrents...`, progress: 22 });
+
+  for (let i = 0; i < torrents.length; i += BATCH_SIZE) {
+    const batch = torrents.slice(i, i + BATCH_SIZE);
+
+    await Promise.all(batch.map(async (torrent) => {
+      const files = await getQbitTorrentFiles(url, cookie, torrent.hash);
+      torrent._files = files; // cache on torrent object for later use
+
+      for (const file of files) {
+        if (!VIDEO_EXTENSIONS.test(file.name)) continue;
+        if (file.size < MKV_MIN_SIZE_BYTES) continue;
+
+        const existing = sizeIndex.get(file.size) || [];
+        existing.push({ torrent, fileName: file.name });
+        sizeIndex.set(file.size, existing);
+      }
+    }));
+
+    const pct = 22 + Math.floor(((i + BATCH_SIZE) / torrents.length) * 8);
+    sendEvent('progress', { step: `Building size index... (${Math.min(i + BATCH_SIZE, torrents.length)}/${torrents.length})`, progress: Math.min(30, pct) });
+  }
+
+  return sizeIndex;
+}
+
+/**
+ * Look up a file size in the index.
+ * Returns the matching torrent ONLY if exactly one torrent has this size
+ * (ambiguous = no match, to avoid false positives).
+ */
+function matchBySize(sizeIndex, fileSizeBytes) {
+  if (!fileSizeBytes || fileSizeBytes < MKV_MIN_SIZE_BYTES) return null;
+
+  const matches = sizeIndex.get(fileSizeBytes);
+  if (!matches || matches.length === 0) return null;
+
+  // Deduplicate by torrent hash (same torrent may have multiple matching files)
+  const uniqueTorrents = [...new Map(matches.map(m => [m.torrent.hash, m.torrent])).values()];
+
+  if (uniqueTorrents.length === 1) {
+    return uniqueTorrents[0]; // Unambiguous match
+  }
+
+  // Multiple different torrents share the same file size → too risky, skip
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// *Arr helpers
+// ---------------------------------------------------------------------------
+
 async function getRadarrMovies(instance) {
   try {
     const response = await axios.get(`${instance.url_internal}/api/v3/movie`, {
@@ -75,6 +169,10 @@ async function getSonarrEpisodeFiles(instance, seriesId) {
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// Name-matching helpers (unchanged logic, kept for hybrid approach)
+// ---------------------------------------------------------------------------
 
 function sanitizeString(str) {
   return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -132,10 +230,14 @@ function matchSanitized(sanitizedAliases, sTorrentName) {
 function isSeasonMatch(torrentName, seasonNumber) {
   if (!torrentName) return false;
   // Match S1, S01, Season 1, Season 01, Staffel 1, Staffel 01
-  // (?!\\d) ensures we don't match S11 when looking for S1
+  // (?!\d) ensures we don't match S11 when looking for S1
   const regex = new RegExp(`(?:S|Season\\s*|Staffel\\s*)0?${seasonNumber}(?!\\d)`, 'i');
   return regex.test(torrentName);
 }
+
+// ---------------------------------------------------------------------------
+// Scan orchestration
+// ---------------------------------------------------------------------------
 
 let lastScanResults = {
   media: [],
@@ -149,6 +251,7 @@ async function scanMedia(sendEvent) {
   const qbitUrl = db.getSetting('qbit_url', '');
   const qbitUser = db.getSetting('qbit_user', '');
   const qbitPass = db.getSetting('qbit_password', '');
+  const matchMode = db.getSetting('match_mode', 'name_then_size'); // 'name_then_size' | 'name_only' | 'size_only'
   
   if (!qbitUrl) {
     throw new Error('qBittorrent is not configured.');
@@ -168,12 +271,19 @@ async function scanMedia(sendEvent) {
     }
   });
 
+  // Build the size index upfront (only when we need it)
+  let sizeIndex = null;
+  if (matchMode === 'name_then_size' || matchMode === 'size_only') {
+    sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, sendEvent);
+    console.log(`Size index built: ${sizeIndex.size} unique file sizes indexed.`);
+  }
+
   const instances = db.getInstances();
   const results = [];
 
   let currentInstanceIdx = 0;
   for (const instance of instances) {
-    const progress = 30 + Math.floor((currentInstanceIdx / instances.length) * 60);
+    const progress = 32 + Math.floor((currentInstanceIdx / instances.length) * 60);
     sendEvent('progress', { step: `Scanning ${instance.name}...`, progress });
 
     if (instance.type === 'radarr') {
@@ -197,17 +307,33 @@ async function scanMedia(sendEvent) {
           movie.movieFile ? movie.movieFile.relativePath : null
         ].filter(Boolean);
 
-        // If we have a specific file/scene name, use only that for matching to avoid title-based mismatches
-        // (e.g., matching a 1080p movie in Radarr with a 4k torrent in qBit because they share the same title)
         const aliases = fileAliases.length > 0 
           ? fileAliases 
           : [movie.title, movie.originalTitle, movie.folderName];
 
         const sanitizedAliases = getSanitizedVariations(aliases);
 
-        // Find matching torrents in qbit using pre-calculated strings
-        const matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
-        
+        // --- Step 1: Name matching ---
+        let matchingTorrents = [];
+        let matchMethod = 'none';
+
+        if (matchMode === 'name_only' || matchMode === 'name_then_size') {
+          matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
+          if (matchingTorrents.length > 0) {
+            matchMethod = 'name';
+          }
+        }
+
+        // --- Step 2: Size fallback (if no name match and size index available) ---
+        if (matchingTorrents.length === 0 && sizeIndex && movie.movieFile) {
+          const arrFileSize = movie.movieFile.size; // size in bytes from Radarr
+          const sizeTorrent = matchBySize(sizeIndex, arrFileSize);
+          if (sizeTorrent) {
+            matchingTorrents = [sizeTorrent];
+            matchMethod = 'size';
+          }
+        }
+
         // Extract tags from matching torrents
         const mediaTags = new Set();
         matchingTorrents.forEach(t => {
@@ -230,7 +356,8 @@ async function scanMedia(sendEvent) {
           releaseName: releaseName,
           fileName: movie.movieFile ? movie.movieFile.relativePath : '',
           qbitTags: Array.from(mediaTags),
-          inQbit: matchingTorrents.length > 0
+          inQbit: matchingTorrents.length > 0,
+          matchMethod // 'name' | 'size' | 'none'
         });
       }
     } else if (instance.type === 'sonarr') {
@@ -266,18 +393,41 @@ async function scanMedia(sendEvent) {
           const seasonSceneNames = Array.from(new Set(seasonFiles.map(f => f.sceneName).filter(Boolean)));
           const seasonPaths = Array.from(new Set(seasonFiles.map(f => f.relativePath).filter(Boolean)));
 
-          // Use specific episode filenames/scene names if available, otherwise fallback to show title
           const aliases = (seasonSceneNames.length > 0 || seasonPaths.length > 0)
             ? [...seasonSceneNames, ...seasonPaths]
-            : [show.title, show.originalTitle, show.path.split(/[\\/]/).pop()];
+            : [show.title, show.originalTitle, show.path.split(/[/\\]/).pop()];
 
           const sanitizedAliases = getSanitizedVariations(aliases);
 
-          // Find matching torrents: must match series name AND season number
-          const matchingTorrents = torrents.filter(t => 
-            matchSanitized(sanitizedAliases, t.sName) &&
-            isSeasonMatch(t.name, sNum)
-          );
+          // --- Step 1: Name matching ---
+          let matchingTorrents = [];
+          let matchMethod = 'none';
+
+          if (matchMode === 'name_only' || matchMode === 'name_then_size') {
+            matchingTorrents = torrents.filter(t => 
+              matchSanitized(sanitizedAliases, t.sName) &&
+              isSeasonMatch(t.name, sNum)
+            );
+            if (matchingTorrents.length > 0) {
+              matchMethod = 'name';
+            }
+          }
+
+          // --- Step 2: Size fallback for Sonarr ---
+          // Strategy: if at least ONE episode file from Arr matches a qBit torrent
+          // by size → the season is considered "in qBit".
+          // This is conservative (less false negatives), which is the priority.
+          if (matchingTorrents.length === 0 && sizeIndex && seasonFiles.length > 0) {
+            for (const episodeFile of seasonFiles) {
+              const arrFileSize = episodeFile.size;
+              const sizeTorrent = matchBySize(sizeIndex, arrFileSize);
+              if (sizeTorrent) {
+                matchingTorrents = [sizeTorrent];
+                matchMethod = 'size';
+                break; // One match is enough
+              }
+            }
+          }
           
           const mediaTags = new Set();
           matchingTorrents.forEach(t => {
@@ -298,10 +448,11 @@ async function scanMedia(sendEvent) {
             instanceName: instance.name,
             arrUrl: `${instance.url_external}/series/${show.titleSlug}`,
             path: actualPath,
-            releaseName: `${show.path.split(/[\\/]/).pop()} S${String(sNum).padStart(2, '0')}`,
+            releaseName: `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
             fileName: seasonFileNames,
             qbitTags: Array.from(mediaTags),
-            inQbit: matchingTorrents.length > 0
+            inQbit: matchingTorrents.length > 0,
+            matchMethod // 'name' | 'size' | 'none'
           });
         }
       }
@@ -314,11 +465,17 @@ async function scanMedia(sendEvent) {
   const finalResults = {
     media: results,
     tags: Array.from(allTags).filter(t => t),
-    timestamp: new Date()
+    timestamp: new Date(),
+    matchMode
   };
 
   lastScanResults = finalResults;
-  console.log(`Saved scan results to memory: ${results.length} items, ${allTags.size} tags.`);
+  
+  const nameMatches = results.filter(r => r.matchMethod === 'name').length;
+  const sizeMatches = results.filter(r => r.matchMethod === 'size').length;
+  const missing = results.filter(r => r.matchMethod === 'none').length;
+  console.log(`Scan complete: ${results.length} items | name=${nameMatches}, size=${sizeMatches}, missing=${missing} | mode=${matchMode}`);
+  
   return finalResults;
 }
 
