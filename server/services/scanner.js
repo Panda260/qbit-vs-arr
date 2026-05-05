@@ -1,45 +1,151 @@
 const axios = require('axios');
 const db = require('./db');
 
+// ---------------------------------------------------------------------------
+// qBittorrent helpers
+// ---------------------------------------------------------------------------
+
 async function getQbitAuthCookie(url, username, password) {
-  try {
-    const cleanUrl = url.replace(/\/$/, '');
-    const params = new URLSearchParams();
-    params.append('username', username);
-    params.append('password', password);
-    
-    const response = await axios.post(`${cleanUrl}/api/v2/auth/login`, params.toString(), 
-      {
-        headers: { 
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Referer': cleanUrl
-        }
-      }
-    );
-    
-    if (response.data === 'Fails.') {
-      throw new Error('Invalid username or password (qBittorrent returned Fails)');
-    }
-    
-    const cookie = response.headers['set-cookie'];
-    if (cookie) return cookie[0].split(';')[0];
-    throw new Error('No cookie returned from qBittorrent');
-  } catch (error) {
-    throw new Error('Failed to authenticate with qBittorrent: ' + (error.response?.data || error.message));
-  }
+  const cleanUrl = url.replace(/\/$/, '');
+  const params = new URLSearchParams();
+  params.append('username', username);
+  params.append('password', password);
+  const response = await axios.post(`${cleanUrl}/api/v2/auth/login`, params.toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': cleanUrl }
+  });
+  if (response.data === 'Fails.') throw new Error('Invalid username or password');
+  const cookie = response.headers['set-cookie'];
+  if (cookie) return cookie[0].split(';')[0];
+  throw new Error('No cookie returned from qBittorrent');
 }
 
 async function getQbitTorrents(url, cookie) {
+  const cleanUrl = url.replace(/\/$/, '');
+  const response = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
+    headers: { Cookie: cookie }
+  });
+  return response.data;
+}
+
+async function getQbitTorrentFiles(url, cookie, hash) {
+  const cleanUrl = url.replace(/\/$/, '');
   try {
-    const cleanUrl = url.replace(/\/$/, '');
-    const response = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
-      headers: { Cookie: cookie }
+    const response = await axios.get(`${cleanUrl}/api/v2/torrents/files`, {
+      headers: { Cookie: cookie },
+      params: { hash }
     });
-    return response.data;
-  } catch (error) {
-    throw new Error('Failed to fetch torrents from qBittorrent: ' + error.message);
+    return response.data || [];
+  } catch {
+    return [];
   }
 }
+
+/**
+ * Fetch tracker URLs for a single torrent.
+ * Returns array of announce URLs.
+ */
+async function getQbitTorrentTrackers(url, cookie, hash) {
+  const cleanUrl = url.replace(/\/$/, '');
+  try {
+    const response = await axios.get(`${cleanUrl}/api/v2/torrents/trackers`, {
+      headers: { Cookie: cookie },
+      params: { hash }
+    });
+    return (response.data || [])
+      .map(t => t.url)
+      .filter(u => u && !u.startsWith('** ')); // skip internal qBit pseudo-trackers
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get all unique tracker URLs from all torrents (for the dropdown).
+ * Samples up to 100 torrents to keep it fast.
+ */
+async function getAllTrackerUrls(url, cookie, torrents) {
+  const seen = new Set();
+  const BATCH_SIZE = 20;
+  const sample = torrents.slice(0, 200); // sample first 200 for speed
+
+  for (let i = 0; i < sample.length; i += BATCH_SIZE) {
+    const batch = sample.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(async (t) => {
+      const trackers = await getQbitTorrentTrackers(url, cookie, t.hash);
+      trackers.forEach(u => {
+        try {
+          const host = new URL(u).host;
+          seen.add(host); // store just the host for readability
+        } catch {
+          // skip invalid URLs
+        }
+      });
+    }));
+  }
+  return Array.from(seen).sort();
+}
+
+// ---------------------------------------------------------------------------
+// Size index builder
+// ---------------------------------------------------------------------------
+
+const MKV_MIN_SIZE_BYTES = 100 * 1024 * 1024;
+const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|iso)$/i;
+
+async function buildSizeIndex(torrents, url, cookie, sendEvent) {
+  const BATCH_SIZE = 20;
+  // Map: size_bytes => [{ torrent, fileName }]
+  const sizeIndex = new Map();
+
+  sendEvent('progress', { step: `Building size index for ${torrents.length} torrents...`, progress: 22 });
+
+  for (let i = 0; i < torrents.length; i += BATCH_SIZE) {
+    const batch = torrents.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(async (torrent) => {
+      const files = await getQbitTorrentFiles(url, cookie, torrent.hash);
+      torrent._files = files;
+      for (const file of files) {
+        if (!VIDEO_EXTENSIONS.test(file.name)) continue;
+        if (file.size < MKV_MIN_SIZE_BYTES) continue;
+        const existing = sizeIndex.get(file.size) || [];
+        existing.push({ torrent, fileName: file.name });
+        sizeIndex.set(file.size, existing);
+      }
+    }));
+    const pct = 22 + Math.floor(((i + BATCH_SIZE) / torrents.length) * 8);
+    sendEvent('progress', { step: `Building size index... (${Math.min(i + BATCH_SIZE, torrents.length)}/${torrents.length})`, progress: Math.min(30, pct) });
+  }
+  return sizeIndex;
+}
+
+/**
+ * Match by size — cross-seed aware:
+ * If multiple torrents share the same size BUT also share the same sanitized name
+ * (i.e., they are cross-seeds of the SAME release), we consider it unambiguous
+ * and return the first one. Only reject when torrents have DIFFERENT names.
+ */
+function matchBySize(sizeIndex, fileSizeBytes) {
+  if (!fileSizeBytes || fileSizeBytes < MKV_MIN_SIZE_BYTES) return null;
+  const matches = sizeIndex.get(fileSizeBytes);
+  if (!matches || matches.length === 0) return null;
+
+  const uniqueTorrents = [...new Map(matches.map(m => [m.torrent.hash, m.torrent])).values()];
+  if (uniqueTorrents.length === 1) return uniqueTorrents[0];
+
+  // Check if all candidates share the same sanitized name (cross-seeds)
+  const names = new Set(uniqueTorrents.map(t => t.sName));
+  if (names.size === 1) {
+    // All cross-seeds of the same release — unambiguous, pick first
+    return uniqueTorrents[0];
+  }
+
+  // Genuinely different releases with same file size → ambiguous
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// *Arr helpers
+// ---------------------------------------------------------------------------
 
 async function getRadarrMovies(instance) {
   try {
@@ -48,7 +154,7 @@ async function getRadarrMovies(instance) {
     });
     return response.data.filter(m => m.hasFile);
   } catch (error) {
-    console.error(`Failed to fetch Radarr movies (${instance.name}): `, error.message);
+    console.error(`Failed to fetch Radarr movies (${instance.name}):`, error.message);
     return [];
   }
 }
@@ -60,7 +166,7 @@ async function getSonarrSeries(instance) {
     });
     return response.data.filter(s => s.statistics && s.statistics.episodeFileCount > 0);
   } catch (error) {
-    console.error(`Failed to fetch Sonarr series (${instance.name}): `, error.message);
+    console.error(`Failed to fetch Sonarr series (${instance.name}):`, error.message);
     return [];
   }
 }
@@ -71,10 +177,83 @@ async function getSonarrEpisodeFiles(instance, seriesId) {
       headers: { 'X-Api-Key': instance.api_key }
     });
     return response.data || [];
-  } catch (error) {
+  } catch {
     return [];
   }
 }
+
+/**
+ * Fetch history for a movie and return { sourceTitle, torrentHash } from the
+ * MOST RECENT "grabbed" or "downloadFolderImported" event.
+ *
+ * torrentHash is only set when downloadClient === 'qBittorrent' — in that case
+ * it equals the qBit info-hash and can be used for a direct, zero-file-read match.
+ */
+async function getRadarrMovieHistory(instance, movieId) {
+  try {
+    const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
+      headers: { 'X-Api-Key': instance.api_key },
+      params: { movieId, pageSize: 50, page: 1, sortKey: 'date', sortDirection: 'descending' }
+    });
+    const records = response.data?.records || [];
+    for (const rec of records) {
+      if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
+        const isQbit = rec.data?.downloadClient?.toLowerCase().includes('qbittorrent');
+        // downloadId for qBit grabs = 40-char hex torrent info-hash
+        const torrentHash = isQbit && rec.downloadId?.match(/^[0-9a-f]{40}$/i)
+          ? rec.downloadId.toLowerCase()
+          : null;
+        return { sourceTitle: rec.sourceTitle, torrentHash };
+      }
+    }
+    return { sourceTitle: null, torrentHash: null };
+  } catch {
+    return { sourceTitle: null, torrentHash: null };
+  }
+}
+
+/**
+ * Fetch Sonarr series history and return { sourceTitle, torrentHash } from the
+ * most recent grabbed/imported event. For individual episode grabs, strips
+ * the episode number so the result works as a season-pack name.
+ */
+async function getSonarrSeriesHistory(instance, seriesId) {
+  try {
+    const response = await axios.get(`${instance.url_internal}/api/v3/history/series`, {
+      headers: { 'X-Api-Key': instance.api_key },
+      params: { seriesId }
+    });
+    const records = (response.data || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+    for (const rec of records) {
+      if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
+        let title = rec.sourceTitle;
+
+        // Individual episode grab → strip episode number → season-pack name
+        // e.g. "Hijack.S01E07.GERMAN..." → "Hijack.S01.GERMAN..."
+        // Guard: don't strip multi-episode ranges like S01E01-E07
+        const isEpisode = /S\d{1,2}E\d{1,2}(?!-E)/i.test(title);
+        if (isEpisode) {
+          title = title.replace(/E\d{1,2}/i, '');
+        }
+
+        const isQbit = rec.data?.downloadClient?.toLowerCase().includes('qbittorrent');
+        const rawHash = rec.downloadId || rec.data?.torrentInfoHash || '';
+        const torrentHash = isQbit && rawHash.match(/^[0-9a-f]{40}$/i)
+          ? rawHash.toLowerCase()
+          : null;
+
+        return { sourceTitle: title, torrentHash };
+      }
+    }
+    return { sourceTitle: null, torrentHash: null };
+  } catch {
+    return { sourceTitle: null, torrentHash: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Name-matching helpers
+// ---------------------------------------------------------------------------
 
 function sanitizeString(str) {
   return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -82,31 +261,24 @@ function sanitizeString(str) {
 
 function getSanitizedVariations(aliases) {
   const result = new Set();
-  
   for (let alias of aliases) {
     if (!alias) continue;
-    
-    // Remove common extensions and metadata tags like [tmdbid-123]
-    let baseAlias = alias
-      .replace(/\.(mkv|mp4|avi|ts|iso|srt|sub)$/i, '')
+    let base = alias
+      .replace(/\.(mkv|mp4|avi|ts|iso|srt|sub|nfo)$/i, '')
       .replace(/(\[|\{)[a-z]+-?[a-z0-9]+(\]|\})/gi, '');
-      
-    // Create variations to handle German/English naming differences and umlauts
     const variations = [
-      baseAlias,
-      baseAlias.replace(/(teil|part|vol|volume)[\s-]*(\d+)/ig, '$2'),
-      baseAlias.replace(/&/g, 'und'),
-      baseAlias.replace(/&/g, 'and'),
-      baseAlias.replace(/(teil|part|vol|volume)[\s-]*(\d+)/ig, '$2').replace(/&/g, 'und'),
-      baseAlias.replace(/ä/ig, 'ae').replace(/ö/ig, 'oe').replace(/ü/ig, 'ue').replace(/ß/ig, 'ss'),
-      baseAlias.replace(/ä/ig, 'a').replace(/ö/ig, 'o').replace(/ü/ig, 'u').replace(/ß/ig, 's')
+      base,
+      base.replace(/(teil|part|vol|volume)[\s-]*(\d+)/ig, '$2'),
+      base.replace(/&/g, 'und'),
+      base.replace(/&/g, 'and'),
+      base.replace(/ä/ig, 'ae').replace(/ö/ig, 'oe').replace(/ü/ig, 'ue').replace(/ß/ig, 'ss'),
+      base.replace(/ä/ig, 'a').replace(/ö/ig, 'o').replace(/ü/ig, 'u').replace(/ß/ig, 's'),
+      // Normalize spaces/dots to nothing (scene names use dots as spaces)
+      base.replace(/[\s.]+/g, ''),
     ];
-    
-    for (const variation of variations) {
-      const sAlias = sanitizeString(variation);
-      if (sAlias && sAlias.length > 3) {
-        result.add(sAlias);
-      }
+    for (const v of variations) {
+      const s = sanitizeString(v);
+      if (s && s.length > 3) result.add(s);
     }
   }
   return Array.from(result);
@@ -115,15 +287,10 @@ function getSanitizedVariations(aliases) {
 function matchSanitized(sanitizedAliases, sTorrentName) {
   if (!sTorrentName) return false;
   for (const sAlias of sanitizedAliases) {
-    if (sAlias === sTorrentName) return true; // Exact match is always valid
-    
+    if (sAlias === sTorrentName) return true;
     if (sTorrentName.includes(sAlias) || sAlias.includes(sTorrentName)) {
-      // Prevent generic file/folder names from matching specific release names.
-      // If the length difference is too large (e.g. 'enolaholmes2' vs 'enolaholmes21080ph265hdr...'), it's a false positive.
       const diff = Math.abs(sAlias.length - sTorrentName.length);
-      if (diff <= 25) {
-        return true;
-      }
+      if (diff <= 25) return true;
     }
   }
   return false;
@@ -131,94 +298,164 @@ function matchSanitized(sanitizedAliases, sTorrentName) {
 
 function isSeasonMatch(torrentName, seasonNumber) {
   if (!torrentName) return false;
-  // Match S1, S01, Season 1, Season 01, Staffel 1, Staffel 01
-  // (?!\\d) ensures we don't match S11 when looking for S1
   const regex = new RegExp(`(?:S|Season\\s*|Staffel\\s*)0?${seasonNumber}(?!\\d)`, 'i');
   return regex.test(torrentName);
 }
 
-let lastScanResults = {
-  media: [],
-  tags: [],
-  timestamp: null
-};
+// ---------------------------------------------------------------------------
+// Tracker host matching helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a torrent has at least one tracker whose host is in selectedTrackerHosts.
+ * Uses the pre-fetched t._trackerHosts array.
+ */
+function torrentHasTracker(torrent, selectedTrackerHosts) {
+  if (!selectedTrackerHosts || selectedTrackerHosts.length === 0) return true;
+  if (!torrent._trackerHosts || torrent._trackerHosts.length === 0) return false;
+  return selectedTrackerHosts.some(host => torrent._trackerHosts.includes(host));
+}
+
+// ---------------------------------------------------------------------------
+// Scan orchestration
+// ---------------------------------------------------------------------------
+
+let lastScanResults = { media: [], tags: [], trackerHosts: [], timestamp: null };
 
 async function scanMedia(sendEvent) {
   sendEvent('progress', { step: 'Initializing', progress: 0 });
 
-  const qbitUrl = db.getSetting('qbit_url', '');
-  const qbitUser = db.getSetting('qbit_user', '');
-  const qbitPass = db.getSetting('qbit_password', '');
-  
-  if (!qbitUrl) {
-    throw new Error('qBittorrent is not configured.');
-  }
+  const qbitUrl      = db.getSetting('qbit_url', '');
+  const qbitUser     = db.getSetting('qbit_user', '');
+  const qbitPass     = db.getSetting('qbit_password', '');
+  const matchMode    = db.getSetting('match_mode', 'hybrid'); // 'hybrid' | 'name_then_size' | 'name_only' | 'size_only'
+  const selectedTrackerHosts = db.getSetting('selected_tracker_hosts', []); // [] = no filter (all)
+
+  if (!qbitUrl) throw new Error('qBittorrent is not configured.');
 
   sendEvent('progress', { step: 'Logging into qBittorrent...', progress: 10 });
   const cookie = await getQbitAuthCookie(qbitUrl, qbitUser, qbitPass);
 
-  sendEvent('progress', { step: 'Fetching qBittorrent Torrents...', progress: 20 });
-  const torrents = await getQbitTorrents(qbitUrl, cookie);
-  
+  sendEvent('progress', { step: 'Fetching qBittorrent Torrents...', progress: 15 });
+  let allTorrents = await getQbitTorrents(qbitUrl, cookie);
+
   const allTags = new Set();
-  torrents.forEach(t => {
-    t.sName = sanitizeString(t.name); // Pre-calculate sanitized name for O(1) matching
-    if (t.tags) {
-      t.tags.split(',').forEach(tag => allTags.add(tag.trim()));
-    }
+  const allTrackerHosts = new Set();
+
+  // Pre-sanitize torrent names
+  allTorrents.forEach(t => {
+    // Strip video extension for single-file torrents (e.g. "Movie.2022.mkv" → "Movie.2022")
+    // so they match Radarr/Sonarr scene names which never include the extension.
+    const strippedName = t.name.replace(/\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|iso)$/i, '');
+    t.sName = sanitizeString(strippedName);
+    if (t.tags) t.tags.split(',').forEach(tag => allTags.add(tag.trim()));
   });
+
+  // Pre-fetch tracker hosts for tracker-filtered scan
+  sendEvent('progress', { step: 'Fetching tracker info...', progress: 18 });
+  const TRACKER_BATCH = 20;
+  for (let i = 0; i < allTorrents.length; i += TRACKER_BATCH) {
+    const batch = allTorrents.slice(i, i + TRACKER_BATCH);
+    await Promise.all(batch.map(async (t) => {
+      const trackers = await getQbitTorrentTrackers(qbitUrl, cookie, t.hash);
+      t._trackerHosts = trackers.map(u => { try { return new URL(u).host; } catch { return null; } }).filter(Boolean);
+      t._trackerHosts.forEach(h => allTrackerHosts.add(h));
+    }));
+  }
+
+  // Apply tracker filter: only consider torrents matching selected tracker hosts
+  const torrents = selectedTrackerHosts.length > 0
+    ? allTorrents.filter(t => torrentHasTracker(t, selectedTrackerHosts))
+    : allTorrents;
+
+  console.log(`Tracker filter: ${selectedTrackerHosts.length > 0 ? selectedTrackerHosts.join(',') : 'none'} → ${torrents.length}/${allTorrents.length} torrents active`);
+
+  // Build size index when needed
+  let sizeIndex = null;
+  if (matchMode !== 'name_only' && matchMode !== 'hybrid') {
+    sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, sendEvent);
+    console.log(`Size index built: ${sizeIndex.size} unique sizes.`);
+  }
 
   const instances = db.getInstances();
   const results = [];
-
   let currentInstanceIdx = 0;
+
   for (const instance of instances) {
-    const progress = 30 + Math.floor((currentInstanceIdx / instances.length) * 60);
+    const progress = 32 + Math.floor((currentInstanceIdx / instances.length) * 60);
     sendEvent('progress', { step: `Scanning ${instance.name}...`, progress });
 
     if (instance.type === 'radarr') {
       const movies = await getRadarrMovies(instance);
+
       for (let i = 0; i < movies.length; i++) {
         const movie = movies[i];
-        
-        const itemProgress = progress + Math.floor(((i + 1) / movies.length) * (60 / instances.length));
-        sendEvent('progress', { 
-          step: `[${i + 1}/${movies.length}] ${instance.name} - ${movie.title}`, 
-          progress: Math.min(99, itemProgress)
-        });
 
-        // Yield to event loop every 10 items so SSE messages flush to frontend
         if (i % 10 === 0) {
+          const itemProgress = progress + Math.floor(((i + 1) / movies.length) * (60 / instances.length));
+          sendEvent('progress', { step: `[${i + 1}/${movies.length}] ${instance.name} - ${movie.title}`, progress: Math.min(99, itemProgress) });
           await new Promise(resolve => setImmediate(resolve));
         }
 
-        const fileAliases = [
-          movie.movieFile ? movie.movieFile.sceneName : null,
-          movie.movieFile ? movie.movieFile.relativePath : null
-        ].filter(Boolean);
+        const mf = movie.movieFile;
 
-        // If we have a specific file/scene name, use only that for matching to avoid title-based mismatches
-        // (e.g., matching a 1080p movie in Radarr with a 4k torrent in qBit because they share the same title)
-        const aliases = fileAliases.length > 0 
-          ? fileAliases 
-          : [movie.title, movie.originalTitle, movie.folderName];
+        // ── Build aliases ────────────────────────────────────────────
+        // Priority: sceneName > relativePath > title/folder
+        const fileAliases = [mf?.sceneName, mf?.relativePath].filter(Boolean);
+        const baseAliases = fileAliases.length > 0
+          ? fileAliases
+          : [movie.title, movie.originalTitle, movie.folderName].filter(Boolean);
 
-        const sanitizedAliases = getSanitizedVariations(aliases);
+        // ── HYBRID MODE: fetch history ────────────────────────────
+        let historySourceTitle = null;
+        let historyTorrentHash = null;
+        if (matchMode === 'hybrid') {
+          const hist = await getRadarrMovieHistory(instance, movie.id);
+          historySourceTitle = hist.sourceTitle;
+          historyTorrentHash = hist.torrentHash;
+        }
 
-        // Find matching torrents in qbit using pre-calculated strings
-        const matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
-        
-        // Extract tags from matching torrents
+        // Combine all aliases (history name takes priority)
+        const allAliases = historySourceTitle
+          ? [historySourceTitle, ...baseAliases]
+          : baseAliases;
+
+        const sanitizedAliases = getSanitizedVariations(allAliases);
+
+        // ── Matching ─────────────────────────────────────────────────
+        let matchingTorrents = [];
+        let matchMethod = 'none';
+
+        // Step 0: Direct torrent hash match (hybrid only, qBit downloads)
+        // downloadId from Radarr IS the qBit info-hash — zero file reads, 100% accurate.
+        if (matchMode === 'hybrid' && historyTorrentHash) {
+          const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
+          if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
+        }
+
+        // Step 1: Name match (always try unless size_only or already matched)
+        if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
+          matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
+          if (matchingTorrents.length > 0) matchMethod = matchMode === 'hybrid' && historySourceTitle ? 'history' : 'name';
+        }
+
+        // Step 2: Size fallback
+        if (matchingTorrents.length === 0 && mf?.size) {
+          if (matchMode === 'size_only' || matchMode === 'name_then_size') {
+            if (!sizeIndex) {
+              sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, () => {});
+            }
+            const sizeTorrent = matchBySize(sizeIndex, mf.size);
+            if (sizeTorrent) { matchingTorrents = [sizeTorrent]; matchMethod = 'size'; }
+          }
+        }
+
+        // ── Tags ─────────────────────────────────────────────────────
         const mediaTags = new Set();
-        matchingTorrents.forEach(t => {
-          if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim()));
-        });
+        matchingTorrents.forEach(t => { if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim())); });
 
-        // Use qBit path if available, else fallback to Arr path
         const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : movie.path;
-
-        // Get release name from movieFile if available
-        const releaseName = movie.movieFile ? (movie.movieFile.sceneName || movie.movieFile.relativePath || movie.title) : movie.title;
+        const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
 
         results.push({
           id: `radarr-${instance.name}-${movie.id}`,
@@ -227,68 +464,88 @@ async function scanMedia(sendEvent) {
           instanceName: instance.name,
           arrUrl: `${instance.url_external}/movie/${movie.titleSlug}`,
           path: actualPath,
-          releaseName: releaseName,
-          fileName: movie.movieFile ? movie.movieFile.relativePath : '',
+          releaseName,
+          fileName: mf ? mf.relativePath : '',
           qbitTags: Array.from(mediaTags),
-          inQbit: matchingTorrents.length > 0
+          inQbit: matchingTorrents.length > 0,
+          matchMethod
         });
       }
+
     } else if (instance.type === 'sonarr') {
       const series = await getSonarrSeries(instance);
+
       for (let i = 0; i < series.length; i++) {
         const show = series[i];
-        
-        const itemProgress = progress + Math.floor(((i + 1) / series.length) * (60 / instances.length));
-        sendEvent('progress', { 
-          step: `[${i + 1}/${series.length}] ${instance.name} - ${show.title}`, 
-          progress: Math.min(99, itemProgress)
-        });
 
-        // Yield to event loop every 5 items (series are heavier) so SSE messages flush to frontend
         if (i % 5 === 0) {
+          const itemProgress = progress + Math.floor(((i + 1) / series.length) * (60 / instances.length));
+          sendEvent('progress', { step: `[${i + 1}/${series.length}] ${instance.name} - ${show.title}`, progress: Math.min(99, itemProgress) });
           await new Promise(resolve => setImmediate(resolve));
         }
 
         if (!show.seasons) continue;
-        
+
         let episodeFiles = [];
-        try {
-          episodeFiles = await getSonarrEpisodeFiles(instance, show.id);
-        } catch (e) { }
-        
+        try { episodeFiles = await getSonarrEpisodeFiles(instance, show.id); } catch {}
+
+        // HYBRID: get latest grabbed sourceTitle + torrentHash for the series
+        let historySourceTitle = null;
+        let historyTorrentHash = null;
+        if (matchMode === 'hybrid') {
+          const hist = await getSonarrSeriesHistory(instance, show.id);
+          historySourceTitle = hist.sourceTitle;
+          historyTorrentHash = hist.torrentHash;
+        }
+
         for (const season of show.seasons) {
-          // Only process seasons that have downloaded files
           if (!season.statistics || season.statistics.episodeFileCount === 0) continue;
-          
           const sNum = season.seasonNumber;
-          
           const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
-          const seasonSceneNames = Array.from(new Set(seasonFiles.map(f => f.sceneName).filter(Boolean)));
-          const seasonPaths = Array.from(new Set(seasonFiles.map(f => f.relativePath).filter(Boolean)));
+          const seasonSceneNames = [...new Set(seasonFiles.map(f => f.sceneName).filter(Boolean))];
+          const seasonPaths     = [...new Set(seasonFiles.map(f => f.relativePath).filter(Boolean))];
 
-          // Use specific episode filenames/scene names if available, otherwise fallback to show title
-          const aliases = (seasonSceneNames.length > 0 || seasonPaths.length > 0)
+          const fileAliases = seasonSceneNames.length > 0 || seasonPaths.length > 0
             ? [...seasonSceneNames, ...seasonPaths]
-            : [show.title, show.originalTitle, show.path.split(/[\\/]/).pop()];
+            : [show.title, show.originalTitle, show.path.split(/[/\\]/).pop()].filter(Boolean);
 
-          const sanitizedAliases = getSanitizedVariations(aliases);
+          const allAliases = historySourceTitle ? [historySourceTitle, ...fileAliases] : fileAliases;
+          const sanitizedAliases = getSanitizedVariations(allAliases);
 
-          // Find matching torrents: must match series name AND season number
-          const matchingTorrents = torrents.filter(t => 
-            matchSanitized(sanitizedAliases, t.sName) &&
-            isSeasonMatch(t.name, sNum)
-          );
-          
+          let matchingTorrents = [];
+          let matchMethod = 'none';
+
+          // Step 0: Direct hash match (hybrid + qBit download)
+          if (matchMode === 'hybrid' && historyTorrentHash) {
+            const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
+            if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
+          }
+
+          // Step 1: Name + season match
+          if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
+            matchingTorrents = torrents.filter(t =>
+              matchSanitized(sanitizedAliases, t.sName) && isSeasonMatch(t.name, sNum)
+            );
+            if (matchingTorrents.length > 0) matchMethod = matchMode === 'hybrid' && historySourceTitle ? 'history' : 'name';
+          }
+
+          if (matchingTorrents.length === 0 && seasonFiles.length > 0) {
+            if (matchMode === 'size_only' || matchMode === 'name_then_size') {
+              if (!sizeIndex) {
+                sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, () => {});
+              }
+              for (const ef of seasonFiles) {
+                const sizeTorrent = matchBySize(sizeIndex, ef.size);
+                if (sizeTorrent) { matchingTorrents = [sizeTorrent]; matchMethod = 'size'; break; }
+              }
+            }
+          }
+
           const mediaTags = new Set();
-          matchingTorrents.forEach(t => {
-            if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim()));
-          });
+          matchingTorrents.forEach(t => { if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim())); });
 
-          // Fallback path: /series/path/Season 01
           const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
           const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
-
-          // Extract all filenames for this specific season to allow the blacklist to check every single file
           const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
 
           results.push({
@@ -298,10 +555,11 @@ async function scanMedia(sendEvent) {
             instanceName: instance.name,
             arrUrl: `${instance.url_external}/series/${show.titleSlug}`,
             path: actualPath,
-            releaseName: `${show.path.split(/[\\/]/).pop()} S${String(sNum).padStart(2, '0')}`,
+            releaseName: `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
             fileName: seasonFileNames,
             qbitTags: Array.from(mediaTags),
-            inQbit: matchingTorrents.length > 0
+            inQbit: matchingTorrents.length > 0,
+            matchMethod
           });
         }
       }
@@ -311,19 +569,25 @@ async function scanMedia(sendEvent) {
 
   sendEvent('progress', { step: 'Finalizing...', progress: 100 });
 
+  const historyMatches = results.filter(r => r.matchMethod === 'history').length;
+  const nameMatches    = results.filter(r => r.matchMethod === 'name').length;
+  const sizeMatches    = results.filter(r => r.matchMethod === 'size').length;
+  const missing        = results.filter(r => r.matchMethod === 'none').length;
+
+  console.log(`Scan done: ${results.length} items | history=${historyMatches}, name=${nameMatches}, size=${sizeMatches}, missing=${missing} | mode=${matchMode}`);
+
   const finalResults = {
     media: results,
     tags: Array.from(allTags).filter(t => t),
-    timestamp: new Date()
+    trackerHosts: Array.from(allTrackerHosts).sort(),
+    timestamp: new Date(),
+    matchMode
   };
-
   lastScanResults = finalResults;
-  console.log(`Saved scan results to memory: ${results.length} items, ${allTags.size} tags.`);
   return finalResults;
 }
 
 function getLastResults() {
-  console.log(`Retrieving last scan results from memory: ${lastScanResults.media.length} items.`);
   return lastScanResults;
 }
 
@@ -337,14 +601,18 @@ async function testArr(type, url, apiKey) {
   const endpoint = type === 'radarr' ? '/api/v3/movie' : '/api/v3/series';
   await axios.get(`${url}${endpoint}`, {
     headers: { 'X-Api-Key': apiKey },
-    params: { limit: 1 } // Fetch only 1 to minimize traffic
+    params: { limit: 1 }
   });
   return true;
 }
 
-module.exports = {
-  scanMedia,
-  getLastResults,
-  testQbit,
-  testArr
-};
+/**
+ * Fetch all unique tracker hosts from qBit (for the dropdown).
+ */
+async function fetchTrackerHosts(url, username, password) {
+  const cookie = await getQbitAuthCookie(url, username, password);
+  const torrents = await getQbitTorrents(url, cookie);
+  return getAllTrackerUrls(url, cookie, torrents);
+}
+
+module.exports = { scanMedia, getLastResults, testQbit, testArr, fetchTrackerHosts };
