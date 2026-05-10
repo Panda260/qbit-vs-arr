@@ -39,8 +39,13 @@ export default function Dashboard() {
   }, [selectedTrackers]);
 
   useEffect(() => {
-    fetchLastResults();
-    fetchSettings();
+    fetchSettings().then(data => {
+      if (data && data.scan_on_startup) {
+        handleScan();
+      } else {
+        fetchLastResults();
+      }
+    });
   }, []);
 
   const fetchSettings = async () => {
@@ -55,7 +60,8 @@ export default function Dashboard() {
       if (settingsRes.data.selected_tracker_hosts?.length > 0) {
         setSelectedTrackers(settingsRes.data.selected_tracker_hosts);
       }
-    } catch (err) { console.error('Failed to fetch settings', err); }
+      return settingsRes.data;
+    } catch (err) { console.error('Failed to fetch settings', err); return null; }
   };
 
   const fetchLastResults = async () => {
@@ -169,11 +175,14 @@ export default function Dashboard() {
         const searchStr = [item.path, item.releaseName, item.title, item.fileName].join(' ').toLowerCase();
         if (settings.ignored_keywords.some(kw => searchStr.includes(kw.toLowerCase()))) return false;
       }
-      // Tracker filter — client-side, no re-scan needed
-      if (selectedTrackers.length > 0 && item.inQbit) {
-        const itemHosts = item.qbitTrackerHosts || [];
-        if (!selectedTrackers.some(h => itemHosts.includes(h))) return false;
-      }
+      // Tracker filter logic:
+      // An item is "effectively in qBit" (seeding) on the selected trackers IF:
+      // it is inQbit AND (no trackers selected OR it has a matching tracker).
+      const effectivelyInQbit = item.inQbit && (
+        selectedTrackers.length === 0 || 
+        selectedTrackers.some(h => (item.qbitTrackerHosts || []).includes(h))
+      );
+
       // Instance filter
       if (filterInstance !== 'all') {
         if (filterInstance.startsWith('type_')) {
@@ -185,7 +194,7 @@ export default function Dashboard() {
         }
       }
       // Display mode
-      return displayMode === 'missing' ? !item.inQbit : item.inQbit;
+      return displayMode === 'missing' ? !effectivelyInQbit : effectivelyInQbit;
     });
   }, [mediaItems, displayMode, filterInstance, settings.ignored_keywords, selectedTrackers]);
 

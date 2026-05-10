@@ -40,6 +40,7 @@ export default function Settings() {
     cross_seed_api_key: '',
     upload_command: '',
     cross_seed_delay: 30,
+    scan_on_startup: true,
   });
 
   const [instances, setInstances] = useState([]);
@@ -180,6 +181,18 @@ export default function Settings() {
                 </div>
               </>
             )}
+          </div>
+
+          {/* Auto Scan */}
+          <div className="mb-6" style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '1.5rem' }}>
+            <h3>Auto Scan</h3>
+            <p className="mb-4" style={{ fontSize: '0.875rem' }}>Automatisch scannen wenn das Dashboard geöffnet wird.</p>
+            <div className="form-group flex items-center gap-2">
+              <input type="checkbox" id="scan_on_startup" checked={!!settings.scan_on_startup}
+                onChange={(e) => setSettings({ ...settings, scan_on_startup: e.target.checked })}
+                style={{ width: 'auto' }} />
+              <label htmlFor="scan_on_startup" style={{ margin: 0 }}>Scan on startup</label>
+            </div>
           </div>
 
           {/* Matching Mode */}
