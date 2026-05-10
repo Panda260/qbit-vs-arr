@@ -321,9 +321,41 @@ function torrentHasTracker(torrent, selectedTrackerHosts) {
 // ---------------------------------------------------------------------------
 
 let lastScanResults = { media: [], tags: [], trackerHosts: [], timestamp: null };
+let scanListeners = new Set();
+let currentScanState = { isScanning: false, progress: 0, step: 'Idle' };
+
+function getScannerState() {
+  return currentScanState;
+}
+
+function addScanListener(listener) {
+  scanListeners.add(listener);
+}
+
+function removeScanListener(listener) {
+  scanListeners.delete(listener);
+}
+
+function broadcastEvent(type, data) {
+  if (type === 'progress') {
+    currentScanState = { isScanning: true, ...data };
+  } else if (type === 'complete' || type === 'error') {
+    currentScanState = { isScanning: false, progress: 100, step: type === 'complete' ? 'Finished' : 'Error' };
+  }
+  scanListeners.forEach(fn => {
+    try { fn(type, data); } catch (e) { console.error('Broadcast error:', e); }
+  });
+}
 
 async function scanMedia(sendEvent) {
-  sendEvent('progress', { step: 'Initializing', progress: 0 });
+  const internalSendEvent = (type, data) => {
+    broadcastEvent(type, data);
+    if (sendEvent) {
+      try { sendEvent(type, data); } catch {}
+    }
+  };
+
+  internalSendEvent('progress', { step: 'Initializing', progress: 0 });
 
   const qbitUrl      = db.getSetting('qbit_url', '');
   const qbitUser     = db.getSetting('qbit_user', '');
@@ -577,7 +609,7 @@ async function scanMedia(sendEvent) {
     currentInstanceIdx++;
   }
 
-  sendEvent('progress', { step: 'Finalizing...', progress: 100 });
+  internalSendEvent('progress', { step: 'Finalizing...', progress: 100 });
 
   const historyMatches = results.filter(r => r.matchMethod === 'history').length;
   const nameMatches    = results.filter(r => r.matchMethod === 'name').length;
@@ -590,10 +622,14 @@ async function scanMedia(sendEvent) {
     media: results,
     tags: Array.from(allTags).filter(t => t),
     trackerHosts: Array.from(allTrackerHosts).sort(),
-    timestamp: new Date(),
+    timestamp: new Date().toISOString(),
     matchMode
   };
+
   lastScanResults = finalResults;
+  db.setSetting('last_results', JSON.stringify(finalResults));
+
+  internalSendEvent('complete', finalResults);
   return finalResults;
 }
 
@@ -625,4 +661,13 @@ async function fetchTrackerHosts(url, username, password) {
   return getAllTrackerUrls(url, cookie, torrents);
 }
 
-module.exports = { scanMedia, getLastResults, testQbit, testArr, fetchTrackerHosts };
+module.exports = { 
+  scanMedia, 
+  getLastResults, 
+  testQbit, 
+  testArr, 
+  fetchTrackerHosts,
+  getScannerState,
+  addScanListener,
+  removeScanListener
+};

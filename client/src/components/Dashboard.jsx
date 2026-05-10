@@ -41,6 +41,7 @@ export default function Dashboard() {
   useEffect(() => {
     fetchSettings();
     fetchLastResults();
+    checkScanStatus();
   }, []);
 
   const fetchSettings = async () => {
@@ -96,6 +97,15 @@ export default function Dashboard() {
   const clearTrackers = () => {
     setSelectedTrackers([]);
     saveTrackerSelection([]);
+  };
+
+  const checkScanStatus = async () => {
+    try {
+      const res = await axios.get('/api/scan-status');
+      if (res.data.isScanning) {
+        handleScan();
+      }
+    } catch (err) { console.error('Failed to check scan status', err); }
   };
 
   const handleScan = () => {

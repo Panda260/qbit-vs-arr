@@ -90,21 +90,47 @@ router.put('/instances/:id', (req, res) => { db.updateInstance(req.params.id, re
 router.delete('/instances/:id', (req, res) => { db.deleteInstance(req.params.id); res.json({ success: true }); });
 
 // --- Scanner (SSE) ---
+router.get('/scan-status', (req, res) => {
+  const { getScannerState } = require('../services/scanner');
+  res.json(getScannerState());
+});
+
 router.get('/scan', async (req, res) => {
+  const { scanMedia, getScannerState, addScanListener, removeScanListener } = require('../services/scanner');
+  
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  const sendEvent = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  const sendEvent = (type, data) => {
+    if (!res.writableEnded) {
+      res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  };
 
-  try {
-    const results = await scanMedia(sendEvent);
-    sendEvent('complete', results);
-  } catch (error) {
-    console.error('Scan error:', error);
-    sendEvent('error', { message: error.message || 'Unknown error during scan.' });
-  } finally {
-    res.end();
+  const listener = (type, data) => {
+    sendEvent(type, data);
+    if (type === 'complete' || type === 'error') {
+      res.end();
+    }
+  };
+
+  const state = getScannerState();
+  addScanListener(listener);
+
+  req.on('close', () => {
+    removeScanListener(listener);
+  });
+
+  if (state.isScanning) {
+    // Send current status immediately so client knows where we are
+    sendEvent('progress', { step: state.step, progress: state.progress });
+  } else {
+    // Start new scan (it will broadcast to our listener automatically)
+    scanMedia().catch(error => {
+      console.error('Scan error:', error);
+      // scanMedia already broadcasts 'error' internally if we wrapped it
+    });
   }
 });
 
