@@ -328,7 +328,7 @@ function torrentHasTracker(torrent, selectedTrackerHosts) {
 
 let lastScanResults = { media: [], tags: [], trackerHosts: [], timestamp: null };
 let scanListeners = new Set();
-let currentScanState = { isScanning: false, progress: 0, step: 'Idle' };
+let currentScanState = { isScanning: false, globalStep: 'Idle', globalProgress: 0, instances: {} };
 
 function getScannerState() {
   return currentScanState;
@@ -344,13 +344,33 @@ function removeScanListener(listener) {
 
 function broadcastEvent(type, data) {
   if (type === 'progress') {
-    currentScanState = { isScanning: true, ...data };
+    if (data.global) {
+      currentScanState.globalStep = data.step;
+      currentScanState.globalProgress = data.progress;
+    } else if (data.instanceName) {
+      if (!currentScanState.instances) currentScanState.instances = {};
+      currentScanState.instances[data.instanceName] = {
+        step: data.step,
+        progress: data.progress
+      };
+    }
+    currentScanState.isScanning = true;
+    
+    // Broadcast the full state for progress events
+    scanListeners.forEach(fn => {
+      try { fn(type, currentScanState); } catch (e) { console.error('Broadcast error:', e); }
+    });
   } else if (type === 'complete' || type === 'error') {
-    currentScanState = { isScanning: false, progress: 100, step: type === 'complete' ? 'Finished' : 'Error' };
+    currentScanState.isScanning = false;
+    currentScanState.globalProgress = 100;
+    currentScanState.globalStep = type === 'complete' ? 'Finished' : 'Error';
+    currentScanState.instances = {}; // clear instances
+    
+    // Broadcast the actual final results or error message
+    scanListeners.forEach(fn => {
+      try { fn(type, data); } catch (e) { console.error('Broadcast error:', e); }
+    });
   }
-  scanListeners.forEach(fn => {
-    try { fn(type, data); } catch (e) { console.error('Broadcast error:', e); }
-  });
 }
 
 async function scanMedia(sendEvent) {
@@ -362,7 +382,7 @@ async function scanMedia(sendEvent) {
   };
 
   console.log('Scanner: scanMedia initiated.');
-  internalSendEvent('progress', { step: 'Initializing', progress: 0 });
+  internalSendEvent('progress', { global: true, step: 'Initializing', progress: 0 });
 
   const qbitUrl      = db.getSetting('qbit_url', '');
   const qbitUser     = db.getSetting('qbit_user', '');
@@ -372,11 +392,11 @@ async function scanMedia(sendEvent) {
 
   if (!qbitUrl) throw new Error('qBittorrent is not configured.');
 
-  internalSendEvent('progress', { step: 'Logging into qBittorrent...', progress: 10 });
+  internalSendEvent('progress', { global: true, step: 'Logging into qBittorrent...', progress: 10 });
   console.log(`Logging into qBittorrent at ${qbitUrl}...`);
   const cookie = await getQbitAuthCookie(qbitUrl, qbitUser, qbitPass);
 
-  internalSendEvent('progress', { step: 'Fetching qBittorrent Torrents...', progress: 15 });
+  internalSendEvent('progress', { global: true, step: 'Fetching qBittorrent Torrents...', progress: 15 });
   console.log('Fetching torrent list from qBittorrent...');
   let allTorrents = await getQbitTorrents(qbitUrl, cookie);
   console.log(`Fetched ${allTorrents.length} torrents.`);
@@ -394,7 +414,7 @@ async function scanMedia(sendEvent) {
   });
 
   // Pre-fetch tracker hosts for tracker-filtered scan
-  internalSendEvent('progress', { step: 'Fetching tracker info...', progress: 18 });
+  internalSendEvent('progress', { global: true, step: 'Fetching tracker info...', progress: 18 });
   console.log('Fetching tracker information for all torrents...');
   const TRACKER_BATCH = 20;
   for (let i = 0; i < allTorrents.length; i += TRACKER_BATCH) {
@@ -417,17 +437,23 @@ async function scanMedia(sendEvent) {
   // Build size index when needed
   let sizeIndex = null;
   if (matchMode !== 'name_only' && matchMode !== 'hybrid') {
-    sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, internalSendEvent);
+    sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, (type, data) => {
+      internalSendEvent(type, { global: true, ...data });
+    });
     console.log(`Size index built: ${sizeIndex.size} unique sizes.`);
   }
 
   const instances = db.getInstances();
-  const results = [];
-  let currentInstanceIdx = 0;
+  
+  internalSendEvent('progress', { global: true, step: 'Scanning Arr instances...', progress: 50 });
+  
+  const instancePromises = instances.map(async (instance) => {
+    const instanceResults = [];
+    const instanceSendEvent = (step, progress) => {
+      internalSendEvent('progress', { instanceName: instance.name, step, progress });
+    };
 
-  for (const instance of instances) {
-    const progress = 32 + Math.floor((currentInstanceIdx / instances.length) * 60);
-    internalSendEvent('progress', { step: `Scanning ${instance.name}...`, progress });
+    instanceSendEvent(`Starting scan...`, 0);
     console.log(`Starting scan of instance: ${instance.name} (${instance.type})`);
 
     if (instance.type === 'radarr') {
@@ -435,12 +461,9 @@ async function scanMedia(sendEvent) {
 
       for (let i = 0; i < movies.length; i++) {
         const movie = movies[i];
-
-        if (i % 10 === 0) {
-          const itemProgress = progress + Math.floor(((i + 1) / movies.length) * (60 / instances.length));
-          internalSendEvent('progress', { step: `[${i + 1}/${movies.length}] ${instance.name} - ${movie.title}`, progress: Math.min(99, itemProgress) });
-          await new Promise(resolve => setImmediate(resolve));
-        }
+        const itemProgress = Math.floor(((i + 1) / movies.length) * 100);
+        instanceSendEvent(`[${i + 1}/${movies.length}] ${movie.title}`, Math.min(99, itemProgress));
+        await new Promise(resolve => setImmediate(resolve));
 
         const mf = movie.movieFile;
 
@@ -506,7 +529,7 @@ async function scanMedia(sendEvent) {
         const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : movie.path;
         const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
 
-        results.push({
+        instanceResults.push({
           id: `radarr-${instance.name}-${movie.id}`,
           title: movie.title,
           type: 'movie',
@@ -527,13 +550,9 @@ async function scanMedia(sendEvent) {
 
       for (let i = 0; i < series.length; i++) {
         const show = series[i];
-
-        if (i % 5 === 0) {
-          const itemProgress = progress + Math.floor(((i + 1) / series.length) * (60 / instances.length));
-          internalSendEvent('progress', { step: `[${i + 1}/${series.length}] ${instance.name} - ${show.title}`, progress: Math.min(99, itemProgress) });
-          console.log(`Scanning Sonarr series ${i + 1}/${series.length}: ${show.title}`);
-          await new Promise(resolve => setImmediate(resolve));
-        }
+        const itemProgress = Math.floor(((i + 1) / series.length) * 100);
+        instanceSendEvent(`[${i + 1}/${series.length}] ${show.title}`, Math.min(99, itemProgress));
+        await new Promise(resolve => setImmediate(resolve));
 
         if (!show.seasons) continue;
 
@@ -604,7 +623,7 @@ async function scanMedia(sendEvent) {
           const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
           const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
 
-          results.push({
+          instanceResults.push({
             id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
             title: `${show.title} - Season ${sNum}`,
             type: 'series',
@@ -621,10 +640,15 @@ async function scanMedia(sendEvent) {
         }
       }
     }
-    currentInstanceIdx++;
-  }
+    
+    instanceSendEvent('Finished', 100);
+    return instanceResults;
+  });
 
-  internalSendEvent('progress', { step: 'Finalizing...', progress: 100 });
+  const allResultsNested = await Promise.all(instancePromises);
+  const results = allResultsNested.flat();
+
+  internalSendEvent('progress', { global: true, step: 'Finalizing...', progress: 100 });
 
   const historyMatches = results.filter(r => r.matchMethod === 'history').length;
   const nameMatches    = results.filter(r => r.matchMethod === 'name').length;
