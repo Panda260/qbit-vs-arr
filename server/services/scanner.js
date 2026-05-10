@@ -450,9 +450,13 @@ async function scanMedia(sendEvent) {
           }
         }
 
-        // ── Tags ─────────────────────────────────────────────────────
+        // ── Tags + Tracker hosts ──────────────────────────────────────
         const mediaTags = new Set();
-        matchingTorrents.forEach(t => { if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim())); });
+        const mediaTrackerHosts = new Set();
+        matchingTorrents.forEach(t => {
+          if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim()));
+          if (t._trackerHosts) t._trackerHosts.forEach(h => mediaTrackerHosts.add(h));
+        });
 
         const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : movie.path;
         const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
@@ -467,6 +471,7 @@ async function scanMedia(sendEvent) {
           releaseName,
           fileName: mf ? mf.relativePath : '',
           qbitTags: Array.from(mediaTags),
+          qbitTrackerHosts: Array.from(mediaTrackerHosts),
           inQbit: matchingTorrents.length > 0,
           matchMethod
         });
@@ -542,7 +547,11 @@ async function scanMedia(sendEvent) {
           }
 
           const mediaTags = new Set();
-          matchingTorrents.forEach(t => { if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim())); });
+          const mediaTrackerHosts = new Set();
+          matchingTorrents.forEach(t => {
+            if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim()));
+            if (t._trackerHosts) t._trackerHosts.forEach(h => mediaTrackerHosts.add(h));
+          });
 
           const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
           const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
@@ -558,6 +567,7 @@ async function scanMedia(sendEvent) {
             releaseName: `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
             fileName: seasonFileNames,
             qbitTags: Array.from(mediaTags),
+            qbitTrackerHosts: Array.from(mediaTrackerHosts),
             inQbit: matchingTorrents.length > 0,
             matchMethod
           });

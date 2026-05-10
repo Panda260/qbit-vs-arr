@@ -169,6 +169,11 @@ export default function Dashboard() {
         const searchStr = [item.path, item.releaseName, item.title, item.fileName].join(' ').toLowerCase();
         if (settings.ignored_keywords.some(kw => searchStr.includes(kw.toLowerCase()))) return false;
       }
+      // Tracker filter — client-side, no re-scan needed
+      if (selectedTrackers.length > 0 && item.inQbit) {
+        const itemHosts = item.qbitTrackerHosts || [];
+        if (!selectedTrackers.some(h => itemHosts.includes(h))) return false;
+      }
       // Instance filter
       if (filterInstance !== 'all') {
         if (filterInstance.startsWith('type_')) {
@@ -182,7 +187,7 @@ export default function Dashboard() {
       // Display mode
       return displayMode === 'missing' ? !item.inQbit : item.inQbit;
     });
-  }, [mediaItems, displayMode, filterInstance, settings.ignored_keywords]);
+  }, [mediaItems, displayMode, filterInstance, settings.ignored_keywords, selectedTrackers]);
 
   const [searchLoading, setSearchLoading] = useState({});
 
@@ -276,7 +281,7 @@ export default function Dashboard() {
               )}
             </div>
             <p className="mb-3" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-              Only match against torrents from selected tracker(s). Leave empty to match all torrents.
+              Filter die Ergebnisse auf Torrents von ausgewählten Trackern. Wirkt sofort — kein Re-Scan nötig.
             </p>
 
             {trackerHosts.length === 0 ? (
@@ -302,10 +307,7 @@ export default function Dashboard() {
             {selectedTrackers.length > 0 && (
               <div className="mb-4" style={{ background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: '8px', padding: '0.5rem 0.75rem' }}>
                 <p style={{ fontSize: '0.75rem', color: '#c084fc', margin: 0 }}>
-                  ⚡ Filtering: {selectedTrackers.join(', ')}
-                </p>
-                <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', margin: '2px 0 0' }}>
-                  Re-scan to apply tracker filter
+                  ⚡ Aktiv: {selectedTrackers.join(', ')}
                 </p>
               </div>
             )}
