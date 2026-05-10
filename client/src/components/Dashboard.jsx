@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Play, Copy, ExternalLink, Check, Search, Activity, RefreshCw, XCircle, CheckCircle, Plus, X, Filter, Radio } from 'lucide-react';
 import axios from 'axios';
 
@@ -25,6 +25,13 @@ export default function Dashboard() {
   const [instances, setInstances]         = useState([]);
   const [filterInstance, setFilterInstance] = useState('all');
   const [newIgnoreKeyword, setNewIgnoreKeyword] = useState('');
+
+  // Ref that always holds the current delay value so searchAllCrossSeed
+  // picks up changes immediately — even while a loop is running.
+  const crossSeedDelayRef = useRef(30);
+  useEffect(() => {
+    crossSeedDelayRef.current = settings.cross_seed_delay ?? 30;
+  }, [settings.cross_seed_delay]);
 
   // Persist tracker selection to localStorage
   useEffect(() => {
@@ -200,7 +207,9 @@ export default function Dashboard() {
       setSearchAllProgress({ current: i + 1, total: filteredMedia.length, currentItem: item.title });
       try { await axios.post('/cross-seed', { path: item.path }); }
       catch (err) { console.error(`Failed to search ${item.title}:`, err); }
-      await new Promise(r => setTimeout(r, 500));
+      // Use the ref so delay changes in Settings apply immediately, even mid-run
+      const delayMs = Math.max(0, crossSeedDelayRef.current * 1000);
+      if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
     }
     setSearchAllProgress(null);
   };

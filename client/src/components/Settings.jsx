@@ -39,6 +39,7 @@ export default function Settings() {
     cross_seed_url: '',
     cross_seed_api_key: '',
     upload_command: '',
+    cross_seed_delay: 30,
   });
 
   const [instances, setInstances] = useState([]);
@@ -249,6 +250,19 @@ export default function Settings() {
               <input type="text" value={settings.upload_command || ''} onChange={e => setSettings({ ...settings, upload_command: e.target.value })} placeholder='docker exec -it upp upPollo upload --category cross-seed-link --tags manual "{path}"' />
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
                 Variables: <code>{`{path}`}</code>, <code>{`{title}`}</code>, <code>{`{type}`}</code>, <code>{`{instance}`}</code>, <code>{`{releaseName}`}</code>, <code>{`{fileName}`}</code>
+              </p>
+            </div>
+            <div className="form-group">
+              <label>Search All – Delay between requests (seconds)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={settings.cross_seed_delay ?? 30}
+                onChange={e => setSettings({ ...settings, cross_seed_delay: parseFloat(e.target.value) || 0 })}
+              />
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                Wartezeit zwischen zwei cross-seed Suchen beim "Search All". Änderungen greifen sofort — auch während ein Search All läuft. Standard: 30 s
               </p>
             </div>
             <button type="button" onClick={testCrossSeedConnection} {...statusBtn(crossSeedTestStatus)} style={{ width: '100%' }}>

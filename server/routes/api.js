@@ -36,7 +36,8 @@ router.get('/settings', (req, res) => {
     upload_command: db.getSetting('upload_command', 'docker exec -it upp upPollo upload --category cross-seed-link --tags manual "{path}"'),
     ignored_keywords: JSON.parse(db.getSetting('ignored_keywords', '[]')),
     match_mode: db.getSetting('match_mode', 'hybrid'),
-    selected_tracker_hosts: db.getSetting('selected_tracker_hosts', [])
+    selected_tracker_hosts: db.getSetting('selected_tracker_hosts', []),
+    cross_seed_delay: parseFloat(db.getSetting('cross_seed_delay', '30'))
   });
 });
 
@@ -46,7 +47,7 @@ router.post('/settings', (req, res) => {
     qbit_url, qbit_user, qbit_password,
     cross_seed_url, cross_seed_api_key,
     ignored_keywords, upload_command, match_mode,
-    selected_tracker_hosts
+    selected_tracker_hosts, cross_seed_delay
   } = req.body;
 
   if (auth_enabled !== undefined)          db.setSetting('auth_enabled', auth_enabled);
@@ -58,6 +59,7 @@ router.post('/settings', (req, res) => {
   if (cross_seed_url !== undefined)        db.setSetting('cross_seed_url', cross_seed_url);
   if (cross_seed_api_key !== undefined)    db.setSetting('cross_seed_api_key', cross_seed_api_key);
   if (upload_command !== undefined)        db.setSetting('upload_command', upload_command);
+  if (cross_seed_delay !== undefined)      db.setSetting('cross_seed_delay', String(cross_seed_delay));
   if (match_mode !== undefined)            db.setSetting('match_mode', match_mode);
   if (ignored_keywords !== undefined)      db.setSetting('ignored_keywords', JSON.stringify(ignored_keywords));
   if (selected_tracker_hosts !== undefined) db.setSetting('selected_tracker_hosts', selected_tracker_hosts);
