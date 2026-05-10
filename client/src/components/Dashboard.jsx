@@ -3,9 +3,8 @@ import { Play, Copy, ExternalLink, Check, Search, Activity, RefreshCw, XCircle, 
 import axios from 'axios';
 
 export default function Dashboard() {
-  const [scanning, setScanning]       = useState(false);
-  const [progress, setProgress]       = useState(0);
-  const [statusText, setStatusText]   = useState('Ready to scan');
+  const [scanState, setScanState]     = useState({ isScanning: false, globalStep: 'Ready to scan', globalProgress: 0, instances: {} });
+  const [lastScanDate, setLastScanDate] = useState(null);
   const [mediaItems, setMediaItems]   = useState([]);
   const [availableTags, setAvailableTags] = useState([]);
 
@@ -66,8 +65,7 @@ export default function Dashboard() {
         setMediaItems(res.data.media);
         setAvailableTags(res.data.tags || []);
         if (res.data.trackerHosts?.length > 0) setTrackerHosts(res.data.trackerHosts);
-        setStatusText(`Last scan: ${new Date(res.data.timestamp).toLocaleString()}`);
-        setProgress(100);
+        setLastScanDate(new Date(res.data.timestamp).toLocaleString());
       }
     } catch (err) { console.error('Failed to fetch last results', err); }
   };
@@ -100,9 +98,7 @@ export default function Dashboard() {
   };
 
   const handleScan = () => {
-    setScanning(true);
-    setProgress(0);
-    setStatusText('Starting scan...');
+    setScanState({ isScanning: true, globalStep: 'Starting scan...', globalProgress: 0, instances: {} });
     setMediaItems([]);
     setAvailableTags([]);
 
@@ -110,8 +106,7 @@ export default function Dashboard() {
 
     eventSource.addEventListener('progress', (e) => {
       const data = JSON.parse(e.data);
-      setProgress(data.progress);
-      setStatusText(data.step);
+      setScanState(data);
     });
 
     eventSource.addEventListener('complete', (e) => {
@@ -119,16 +114,19 @@ export default function Dashboard() {
       setMediaItems(data.media);
       setAvailableTags(data.tags || []);
       if (data.trackerHosts?.length > 0) setTrackerHosts(data.trackerHosts);
-      setScanning(false);
-      setProgress(100);
-      setStatusText('Scan complete');
+      setScanState({ isScanning: false, globalStep: 'Scan complete', globalProgress: 100, instances: {} });
+      setLastScanDate(new Date().toLocaleString());
       eventSource.close();
     });
 
     eventSource.addEventListener('error', (e) => {
-      try { const data = JSON.parse(e.data); setStatusText(`Error: ${data.message}`); }
-      catch { setStatusText('Scan failed.'); }
-      setScanning(false);
+      try { 
+        const data = JSON.parse(e.data); 
+        setScanState(prev => ({ ...prev, isScanning: false, globalStep: `Error: ${data.message}` }));
+      }
+      catch { 
+        setScanState(prev => ({ ...prev, isScanning: false, globalStep: 'Scan failed.' }));
+      }
       eventSource.close();
     });
   };
@@ -137,7 +135,8 @@ export default function Dashboard() {
     try {
       const res = await axios.get('/scan-status');
       if (res.data.isScanning) {
-        handleScan();
+        setScanState(res.data);
+        handleScan(); // Join the existing SSE stream
       }
     } catch (err) { console.error('Failed to check scan status', err); }
   };
@@ -257,23 +256,47 @@ export default function Dashboard() {
         <div>
           <h2>Media Sync Dashboard</h2>
           <p>Find downloaded media that is not seeded in qBittorrent.</p>
+          {!scanState.isScanning && lastScanDate && (
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+              Last scanned: {lastScanDate}
+            </p>
+          )}
         </div>
-        <button onClick={handleScan} disabled={scanning} className="btn btn-primary">
-          {scanning ? <Search size={18} className="animate-spin" /> : <Play size={18} />}
-          {scanning ? 'Scanning...' : 'Start Scan'}
+        <button onClick={handleScan} disabled={scanState.isScanning} className="btn btn-primary">
+          {scanState.isScanning ? <Search size={18} className="animate-spin" /> : <Play size={18} />}
+          {scanState.isScanning ? 'Scanning...' : 'Start Scan'}
         </button>
       </div>
 
       {/* Progress */}
-      {(scanning || progress > 0) && (
-        <div className="glass-panel mb-4 animate-fade-in">
-          <div className="flex justify-between items-center mb-2">
-            <span style={{ fontWeight: 500 }}>{statusText}</span>
-            <span style={{ color: 'var(--text-secondary)' }}>{progress}%</span>
-          </div>
-          <div className="progress-container">
-            <div className="progress-bar" style={{ width: `${progress}%` }} />
-          </div>
+      {scanState.isScanning && (
+        <div className="glass-panel mb-4 animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          
+          {/* Global Progress (always show if scanning) */}
+          {Object.keys(scanState.instances || {}).length === 0 && (
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span style={{ fontWeight: 500 }}>{scanState.globalStep}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{scanState.globalProgress}%</span>
+              </div>
+              <div className="progress-container">
+                <div className="progress-bar" style={{ width: `${scanState.globalProgress}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* Instance Progress Bars */}
+          {Object.entries(scanState.instances || {}).map(([instanceName, state]) => (
+            <div key={instanceName}>
+              <div className="flex justify-between items-center mb-2">
+                <span style={{ fontWeight: 500, fontSize: '0.9rem' }}>{instanceName}: {state.step}</span>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{state.progress}%</span>
+              </div>
+              <div className="progress-container" style={{ height: '6px' }}>
+                <div className="progress-bar" style={{ width: `${state.progress}%`, background: 'var(--primary)' }} />
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
