@@ -99,15 +99,6 @@ export default function Dashboard() {
     saveTrackerSelection([]);
   };
 
-  const checkScanStatus = async () => {
-    try {
-      const res = await axios.get('/api/scan-status');
-      if (res.data.isScanning) {
-        handleScan();
-      }
-    } catch (err) { console.error('Failed to check scan status', err); }
-  };
-
   const handleScan = () => {
     setScanning(true);
     setProgress(0);
@@ -140,6 +131,15 @@ export default function Dashboard() {
       setScanning(false);
       eventSource.close();
     });
+  };
+
+  const checkScanStatus = async () => {
+    try {
+      const res = await axios.get('/scan-status');
+      if (res.data.isScanning) {
+        handleScan();
+      }
+    } catch (err) { console.error('Failed to check scan status', err); }
   };
 
   const copyCommand = (item) => {
