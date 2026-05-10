@@ -415,7 +415,7 @@ export default function Dashboard() {
                         <span style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', background: item.type === 'movie' ? 'rgba(59,130,246,0.2)' : 'rgba(167,139,250,0.2)', color: item.type === 'movie' ? '#93c5fd' : '#d8b4fe' }}>
                           {item.type.toUpperCase()}
                         </span>
-                        {item.inQbit && matchBadge(item.matchMethod)}
+                        {displayMode === 'seeding' && item.inQbit && matchBadge(item.matchMethod)}
                       </div>
                     </div>
                     <p style={{ fontSize: '0.95rem', color: '#60a5fa', fontWeight: 500, marginBottom: '0.5rem', wordBreak: 'break-all' }}>
@@ -425,7 +425,7 @@ export default function Dashboard() {
                       <p style={{ fontSize: '0.85rem', margin: 0 }}><span style={{ color: 'var(--text-secondary)' }}>Instance:</span> {item.instanceName}</p>
                       <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', wordBreak: 'break-all', margin: 0 }}>{item.path}</p>
                     </div>
-                    {showAllTags && item.inQbit && item.qbitTags.length > 0 && (
+                    {displayMode === 'seeding' && showAllTags && item.inQbit && item.qbitTags.length > 0 && (
                       <div className="flex gap-2 flex-wrap animate-fade-in">
                         {item.qbitTags.map(t => <span key={t} className="tag-badge" style={{ fontSize: '0.65rem', padding: '1px 6px', cursor: 'default' }}>{t}</span>)}
                       </div>
