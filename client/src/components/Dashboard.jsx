@@ -39,13 +39,8 @@ export default function Dashboard() {
   }, [selectedTrackers]);
 
   useEffect(() => {
-    fetchSettings().then(data => {
-      if (data && data.scan_on_startup) {
-        handleScan();
-      } else {
-        fetchLastResults();
-      }
-    });
+    fetchSettings();
+    fetchLastResults();
   }, []);
 
   const fetchSettings = async () => {
@@ -60,8 +55,7 @@ export default function Dashboard() {
       if (settingsRes.data.selected_tracker_hosts?.length > 0) {
         setSelectedTrackers(settingsRes.data.selected_tracker_hosts);
       }
-      return settingsRes.data;
-    } catch (err) { console.error('Failed to fetch settings', err); return null; }
+    } catch (err) { console.error('Failed to fetch settings', err); }
   };
 
   const fetchLastResults = async () => {

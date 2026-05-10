@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const dotenv = require('dotenv');
 const { getSetting } = require('./services/db');
+const { scanMedia } = require('./services/scanner');
 const apiRoutes = require('./routes/api');
 
 dotenv.config();
@@ -54,4 +55,13 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+
+  if (getSetting('scan_on_startup', true)) {
+    console.log('Auto-scan on startup is enabled. Starting initial background scan...');
+    scanMedia(() => {}).then(() => {
+      console.log('Initial background auto-scan completed successfully.');
+    }).catch(err => {
+      console.error('Initial background auto-scan failed:', err);
+    });
+  }
 });
