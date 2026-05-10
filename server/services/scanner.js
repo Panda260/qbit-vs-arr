@@ -97,7 +97,12 @@ async function buildSizeIndex(torrents, url, cookie, sendEvent) {
   // Map: size_bytes => [{ torrent, fileName }]
   const sizeIndex = new Map();
 
-  sendEvent('progress', { step: `Building size index for ${torrents.length} torrents...`, progress: 22 });
+  // Note: we don't have access to internalSendEvent here easily unless we pass it, 
+  // but buildSizeIndex is called from scanMedia which uses the passed 'sendEvent' 
+  // which I will now make sure is the internal one.
+  
+  if (sendEvent) sendEvent('progress', { step: `Building size index for ${torrents.length} torrents...`, progress: 22 });
+  console.log(`Building size index for ${torrents.length} torrents...`);
 
   for (let i = 0; i < torrents.length; i += BATCH_SIZE) {
     const batch = torrents.slice(i, i + BATCH_SIZE);
@@ -113,8 +118,9 @@ async function buildSizeIndex(torrents, url, cookie, sendEvent) {
       }
     }));
     const pct = 22 + Math.floor(((i + BATCH_SIZE) / torrents.length) * 8);
-    sendEvent('progress', { step: `Building size index... (${Math.min(i + BATCH_SIZE, torrents.length)}/${torrents.length})`, progress: Math.min(30, pct) });
+    if (sendEvent) sendEvent('progress', { step: `Building size index... (${Math.min(i + BATCH_SIZE, torrents.length)}/${torrents.length})`, progress: Math.min(30, pct) });
   }
+  console.log('Size index built.');
   return sizeIndex;
 }
 
@@ -355,6 +361,7 @@ async function scanMedia(sendEvent) {
     }
   };
 
+  console.log('Scanner: scanMedia initiated.');
   internalSendEvent('progress', { step: 'Initializing', progress: 0 });
 
   const qbitUrl      = db.getSetting('qbit_url', '');
@@ -365,11 +372,14 @@ async function scanMedia(sendEvent) {
 
   if (!qbitUrl) throw new Error('qBittorrent is not configured.');
 
-  sendEvent('progress', { step: 'Logging into qBittorrent...', progress: 10 });
+  internalSendEvent('progress', { step: 'Logging into qBittorrent...', progress: 10 });
+  console.log(`Logging into qBittorrent at ${qbitUrl}...`);
   const cookie = await getQbitAuthCookie(qbitUrl, qbitUser, qbitPass);
 
-  sendEvent('progress', { step: 'Fetching qBittorrent Torrents...', progress: 15 });
+  internalSendEvent('progress', { step: 'Fetching qBittorrent Torrents...', progress: 15 });
+  console.log('Fetching torrent list from qBittorrent...');
   let allTorrents = await getQbitTorrents(qbitUrl, cookie);
+  console.log(`Fetched ${allTorrents.length} torrents.`);
 
   const allTags = new Set();
   const allTrackerHosts = new Set();
@@ -384,7 +394,8 @@ async function scanMedia(sendEvent) {
   });
 
   // Pre-fetch tracker hosts for tracker-filtered scan
-  sendEvent('progress', { step: 'Fetching tracker info...', progress: 18 });
+  internalSendEvent('progress', { step: 'Fetching tracker info...', progress: 18 });
+  console.log('Fetching tracker information for all torrents...');
   const TRACKER_BATCH = 20;
   for (let i = 0; i < allTorrents.length; i += TRACKER_BATCH) {
     const batch = allTorrents.slice(i, i + TRACKER_BATCH);
@@ -394,6 +405,7 @@ async function scanMedia(sendEvent) {
       t._trackerHosts.forEach(h => allTrackerHosts.add(h));
     }));
   }
+  console.log('Finished fetching tracker info.');
 
   // Apply tracker filter: only consider torrents matching selected tracker hosts
   const torrents = selectedTrackerHosts.length > 0
@@ -405,7 +417,7 @@ async function scanMedia(sendEvent) {
   // Build size index when needed
   let sizeIndex = null;
   if (matchMode !== 'name_only' && matchMode !== 'hybrid') {
-    sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, sendEvent);
+    sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, internalSendEvent);
     console.log(`Size index built: ${sizeIndex.size} unique sizes.`);
   }
 
@@ -415,7 +427,8 @@ async function scanMedia(sendEvent) {
 
   for (const instance of instances) {
     const progress = 32 + Math.floor((currentInstanceIdx / instances.length) * 60);
-    sendEvent('progress', { step: `Scanning ${instance.name}...`, progress });
+    internalSendEvent('progress', { step: `Scanning ${instance.name}...`, progress });
+    console.log(`Starting scan of instance: ${instance.name} (${instance.type})`);
 
     if (instance.type === 'radarr') {
       const movies = await getRadarrMovies(instance);
@@ -425,7 +438,7 @@ async function scanMedia(sendEvent) {
 
         if (i % 10 === 0) {
           const itemProgress = progress + Math.floor(((i + 1) / movies.length) * (60 / instances.length));
-          sendEvent('progress', { step: `[${i + 1}/${movies.length}] ${instance.name} - ${movie.title}`, progress: Math.min(99, itemProgress) });
+          internalSendEvent('progress', { step: `[${i + 1}/${movies.length}] ${instance.name} - ${movie.title}`, progress: Math.min(99, itemProgress) });
           await new Promise(resolve => setImmediate(resolve));
         }
 
@@ -517,7 +530,8 @@ async function scanMedia(sendEvent) {
 
         if (i % 5 === 0) {
           const itemProgress = progress + Math.floor(((i + 1) / series.length) * (60 / instances.length));
-          sendEvent('progress', { step: `[${i + 1}/${series.length}] ${instance.name} - ${show.title}`, progress: Math.min(99, itemProgress) });
+          internalSendEvent('progress', { step: `[${i + 1}/${series.length}] ${instance.name} - ${show.title}`, progress: Math.min(99, itemProgress) });
+          console.log(`Scanning Sonarr series ${i + 1}/${series.length}: ${show.title}`);
           await new Promise(resolve => setImmediate(resolve));
         }
 
@@ -569,7 +583,8 @@ async function scanMedia(sendEvent) {
           if (matchingTorrents.length === 0 && seasonFiles.length > 0) {
             if (matchMode === 'size_only' || matchMode === 'name_then_size') {
               if (!sizeIndex) {
-                sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, () => {});
+                console.log('Dynamic size index build started for Sonarr...');
+                sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, internalSendEvent);
               }
               for (const ef of seasonFiles) {
                 const sizeTorrent = matchBySize(sizeIndex, ef.size);
