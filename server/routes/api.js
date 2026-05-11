@@ -125,16 +125,21 @@ router.get('/scan', async (req, res) => {
   if (state.isScanning) {
     // Send current status immediately so client knows where we are
     sendEvent('progress', { step: state.step, progress: state.progress });
-  } else {
+  } else if (req.query.start === 'true') {
     // Start new scan (it will broadcast to our listener automatically)
     scanMedia().catch(error => {
       console.error('Scan error:', error);
       // scanMedia already broadcasts 'error' internally if we wrapped it
     });
+  } else {
+    // Not scanning and not asked to start -> close immediately
+    sendEvent('complete', getLastResults());
   }
 });
 
 // --- cross-seed ---
+const { startSearchAll, cancelSearchAll, getSearchAllStatus } = require('../services/crossSeedSearch');
+
 router.post('/cross-seed', async (req, res) => {
   try {
     const { path: mediaPath } = req.body;
@@ -162,6 +167,30 @@ router.post('/test/cross-seed', async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Connection failed: ' + (error.response?.data || error.message) });
   }
+});
+
+router.get('/cross-seed/search-all/status', (req, res) => {
+  res.json(getSearchAllStatus());
+});
+
+router.post('/cross-seed/search-all', async (req, res) => {
+  try {
+    const { paths } = req.body;
+    if (!paths || !Array.isArray(paths)) return res.status(400).json({ message: 'paths array is required' });
+    
+    let url = db.getSetting('cross_seed_url', '');
+    const apiKey = db.getSetting('cross_seed_api_key', '');
+    const delay = parseFloat(db.getSetting('cross_seed_delay', '30')) * 1000;
+    
+    const status = await startSearchAll(paths, delay, url, apiKey);
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/cross-seed/search-all/cancel', (req, res) => {
+  res.json(cancelSearchAll());
 });
 
 // --- Last Results ---

@@ -41,6 +41,19 @@ export default function Dashboard() {
     fetchSettings();
     fetchLastResults();
     checkScanStatus();
+
+    // Poll backend search all status
+    const interval = setInterval(async () => {
+      try {
+        const res = await axios.get('/cross-seed/search-all/status');
+        if (res.data.isRunning) {
+          setSearchAllStatus(res.data);
+        } else {
+          setSearchAllStatus(null);
+        }
+      } catch (err) { }
+    }, 2000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchSettings = async () => {
@@ -97,12 +110,14 @@ export default function Dashboard() {
     saveTrackerSelection([]);
   };
 
-  const handleScan = () => {
-    setScanState({ isScanning: true, globalStep: 'Starting scan...', globalProgress: 0, instances: {} });
-    setMediaItems([]);
-    setAvailableTags([]);
+  const handleScan = (startNew = false) => {
+    if (startNew) {
+      setScanState({ isScanning: true, globalStep: 'Starting scan...', globalProgress: 0, instances: {} });
+      setMediaItems([]);
+      setAvailableTags([]);
+    }
 
-    const eventSource = new EventSource('/api/scan');
+    const eventSource = new EventSource(startNew ? '/api/scan?start=true' : '/api/scan');
 
     eventSource.addEventListener('progress', (e) => {
       const data = JSON.parse(e.data);
@@ -111,9 +126,11 @@ export default function Dashboard() {
 
     eventSource.addEventListener('complete', (e) => {
       const data = JSON.parse(e.data);
-      setMediaItems(data.media);
-      setAvailableTags(data.tags || []);
-      if (data.trackerHosts?.length > 0) setTrackerHosts(data.trackerHosts);
+      if (data && data.media) {
+        setMediaItems(data.media);
+        setAvailableTags(data.tags || []);
+        if (data.trackerHosts?.length > 0) setTrackerHosts(data.trackerHosts);
+      }
       setScanState({ isScanning: false, globalStep: 'Scan complete', globalProgress: 100, instances: {} });
       setLastScanDate(new Date().toLocaleString());
       eventSource.close();
@@ -136,7 +153,7 @@ export default function Dashboard() {
       const res = await axios.get('/scan-status');
       if (res.data.isScanning) {
         setScanState(res.data);
-        handleScan(); // Join the existing SSE stream
+        handleScan(false); // Join the existing SSE stream
       }
     } catch (err) { console.error('Failed to check scan status', err); }
   };
@@ -214,21 +231,26 @@ export default function Dashboard() {
     setTimeout(() => setSearchLoading(prev => { const n = { ...prev }; delete n[item.id]; return n; }), 3000);
   };
 
-  const [searchAllProgress, setSearchAllProgress] = useState(null);
+  const [searchAllStatus, setSearchAllStatus] = useState(null);
 
   const searchAllCrossSeed = async () => {
     if (!filteredMedia?.length) return;
-    setSearchAllProgress({ current: 0, total: filteredMedia.length });
-    for (let i = 0; i < filteredMedia.length; i++) {
-      const item = filteredMedia[i];
-      setSearchAllProgress({ current: i + 1, total: filteredMedia.length, currentItem: item.title });
-      try { await axios.post('/cross-seed', { path: item.path }); }
-      catch (err) { console.error(`Failed to search ${item.title}:`, err); }
-      // Use the ref so delay changes in Settings apply immediately, even mid-run
-      const delayMs = Math.max(0, crossSeedDelayRef.current * 1000);
-      if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+    try {
+      const paths = filteredMedia.map(item => item.path);
+      const res = await axios.post('/cross-seed/search-all', { paths });
+      setSearchAllStatus(res.data);
+    } catch (err) {
+      console.error('Failed to start search all:', err);
     }
-    setSearchAllProgress(null);
+  };
+
+  const cancelSearchAll = async () => {
+    try {
+      const res = await axios.post('/cross-seed/search-all/cancel');
+      setSearchAllStatus(res.data);
+    } catch (err) {
+      console.error('Failed to cancel search all:', err);
+    }
   };
 
   // Match method label
@@ -262,7 +284,7 @@ export default function Dashboard() {
             </p>
           )}
         </div>
-        <button onClick={handleScan} disabled={scanState.isScanning} className="btn btn-primary">
+        <button onClick={() => handleScan(true)} disabled={scanState.isScanning} className="btn btn-primary">
           {scanState.isScanning ? <Search size={18} className="animate-spin" /> : <Play size={18} />}
           {scanState.isScanning ? 'Scanning...' : 'Start Scan'}
         </button>
@@ -411,22 +433,41 @@ export default function Dashboard() {
 
                 {/* Search All */}
                 {displayMode === 'missing' && (
-                  <button onClick={searchAllCrossSeed} disabled={searchAllProgress !== null} className="btn btn-primary btn-sm flex items-center gap-2" style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', whiteSpace: 'nowrap' }}>
-                    {searchAllProgress ? <><RefreshCw size={14} className="animate-spin" /> {searchAllProgress.current}/{searchAllProgress.total}</> : <><Search size={14} /> Search All</>}
+                  <button onClick={searchAllCrossSeed} disabled={searchAllStatus !== null} className="btn btn-primary btn-sm flex items-center gap-2" style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', whiteSpace: 'nowrap' }}>
+                    {searchAllStatus ? <><RefreshCw size={14} className="animate-spin" /> {searchAllStatus.current}/{searchAllStatus.total}</> : <><Search size={14} /> Search All</>}
                   </button>
                 )}
               </div>
             </div>
 
             {/* Search all progress bar */}
-            {searchAllProgress && (
+            {searchAllStatus && (
               <div className="glass-panel mb-6 animate-fade-in" style={{ padding: '0.75rem 1.5rem' }}>
                 <div className="flex justify-between items-center mb-2">
-                  <span style={{ fontSize: '0.85rem' }}>Searching cross-seed: <strong>{searchAllProgress.currentItem}</strong></span>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{Math.round((searchAllProgress.current / searchAllProgress.total) * 100)}%</span>
+                  <div style={{ flex: 1 }}>
+                    <span style={{ fontSize: '0.85rem' }}>Searching cross-seed: <strong>{searchAllStatus.currentItem}</strong></span>
+                    {searchAllStatus.eta !== null && (
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '1rem' }}>
+                        ETA: {searchAllStatus.eta}s
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      {searchAllStatus.current} / {searchAllStatus.total} ({Math.round((searchAllStatus.current / searchAllStatus.total) * 100)}%)
+                    </span>
+                    <button 
+                      onClick={cancelSearchAll} 
+                      disabled={searchAllStatus.cancelRequested}
+                      className="btn btn-danger btn-sm" 
+                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}
+                    >
+                      {searchAllStatus.cancelRequested ? 'Canceling...' : 'Cancel'}
+                    </button>
+                  </div>
                 </div>
                 <div className="progress-container" style={{ height: '4px' }}>
-                  <div className="progress-bar" style={{ width: `${(searchAllProgress.current / searchAllProgress.total) * 100}%` }} />
+                  <div className="progress-bar" style={{ width: `${(searchAllStatus.current / searchAllStatus.total) * 100}%` }} />
                 </div>
               </div>
             )}
