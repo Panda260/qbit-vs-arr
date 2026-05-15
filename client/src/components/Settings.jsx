@@ -5,13 +5,13 @@ import axios from 'axios';
 const MATCH_MODES = [
   {
     value: 'hardlink',
-    label: '🔗 Hardlink: Inode Match (Recommended & Most Accurate)',
-    description: 'Detects if files are identical via filesystem Inodes. 100% accurate, extremely fast, and zero file reading. Requires read-access to media/torrent folders. Falls back to Hybrid if no hardlink is found.',
+    label: '🔗 Hardlink: Inode Match (Ultraschnell & 100% genau)',
+    description: 'Der schnellste Modus. Erkennt identische Dateien sofort über die Dateisystem-ID (Inode). 100% genau, extrem schnell und verursacht keine Festplattenlast. Setzt Hardlinks voraus.',
   },
   {
     value: 'fast_hash',
-    label: '⚡ Fast Checksum: Partial Hash',
-    description: 'Hashes the first and last 1MB of the file. Very fast and works even if files are NOT hardlinked. Requires read-access to media/torrent folders. Falls back to Hybrid if no hash match is found.',
+    label: '⚡ Fast Checksum: Partial Hash (Sehr genau, aber langsamer)',
+    description: 'Erstellt einen Fingerabdruck aus den ersten und letzten 1MB der Datei. Sehr genau, aber langsamer als Hardlinks, da hierfür die Festplatte gelesen werden muss.',
   },
   {
     value: 'hybrid',
