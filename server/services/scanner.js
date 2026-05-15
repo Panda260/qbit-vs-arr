@@ -587,16 +587,30 @@ async function scanMedia(sendEvent) {
   });
 
   // Pre-fetch tracker hosts for tracker-filtered scan
-  internalSendEvent('progress', { global: true, step: 'Fetching tracker info...', progress: 18 });
+  internalSendEvent('progress', { global: true, step: 'Fetching tracker info (UI may be slow)...', progress: 18 });
   console.log('Fetching tracker information for all torrents...');
   const TRACKER_BATCH = 20;
   for (let i = 0; i < allTorrents.length; i += TRACKER_BATCH) {
     const batch = allTorrents.slice(i, i + TRACKER_BATCH);
     await Promise.all(batch.map(async (t) => {
-      const trackers = await getQbitTorrentTrackers(qbitUrl, cookie, t.hash);
-      t._trackerHosts = trackers.map(u => { try { return new URL(u).host; } catch { return null; } }).filter(Boolean);
-      t._trackerHosts.forEach(h => allTrackerHosts.add(h));
+      try {
+        const trackers = await getQbitTorrentTrackers(qbitUrl, cookie, t.hash);
+        t._trackerHosts = trackers.map(u => { try { return new URL(u).host; } catch { return null; } }).filter(Boolean);
+        t._trackerHosts.forEach(h => allTrackerHosts.add(h));
+      } catch (err) {
+        console.error(`Failed to fetch trackers for ${t.name}:`, err.message);
+      }
     }));
+    
+    // Periodically yield to the event loop so other requests (like heartbeat/status) can be processed
+    if (i % 100 === 0) {
+      await new Promise(resolve => setImmediate(resolve));
+      internalSendEvent('progress', { 
+        global: true, 
+        step: `Fetching tracker info (${i}/${allTorrents.length})...`, 
+        progress: 18 + Math.floor((i / allTorrents.length) * 5) // spread over 18-23% range
+      });
+    }
   }
   console.log('Finished fetching tracker info.');
 

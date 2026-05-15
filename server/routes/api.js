@@ -124,7 +124,14 @@ router.get('/scan', async (req, res) => {
   const state = getScannerState();
   addScanListener(listener);
 
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) {
+      res.write(': keepalive\n\n');
+    }
+  }, 15000); // 15s heartbeat
+
   req.on('close', () => {
+    clearInterval(heartbeat);
     removeScanListener(listener);
   });
 

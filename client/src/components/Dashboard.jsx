@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, Copy, ExternalLink, Check, Search, Activity, RefreshCw, XCircle, CheckCircle, Plus, X, Filter, Radio } from 'lucide-react';
+import { Play, Copy, ExternalLink, Check, Search, Activity, RefreshCw, XCircle, CheckCircle, Plus, X, Filter, Radio, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 
 export default function Dashboard() {
@@ -321,6 +321,28 @@ export default function Dashboard() {
               </div>
             </div>
           ))}
+
+          {/* Long Running Phase Warning */}
+          {scanState.globalStep?.includes('Fetching tracker info') && (
+            <div style={{ 
+              marginTop: '0.5rem', 
+              padding: '0.75rem', 
+              background: 'rgba(234,179,8,0.1)', 
+              border: '1px solid rgba(234,179,8,0.3)', 
+              borderRadius: '8px', 
+              color: '#fde047', 
+              fontSize: '0.8rem', 
+              display: 'flex', 
+              gap: '10px',
+              alignItems: 'center' 
+            }}>
+              <AlertCircle size={18} style={{ flexShrink: 0 }} />
+              <span>
+                <strong>Geduld erforderlich:</strong> Das Abrufen der Tracker-Informationen kann bei vielen Torrents sehr lange dauern. 
+                Die Webseite reagiert in dieser Zeit eventuell nicht mehr, aber der Scan läuft im Hintergrund zuverlässig weiter.
+              </span>
+            </div>
+          )}
         </div>
       )}
 
