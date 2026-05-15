@@ -35,7 +35,7 @@ router.get('/settings', (req, res) => {
     cross_seed_api_key: db.getSetting('cross_seed_api_key', ''),
     upload_command: db.getSetting('upload_command', 'docker exec -it upp upPollo upload --category cross-seed-link --tags manual "{path}"'),
     ignored_keywords: JSON.parse(db.getSetting('ignored_keywords', '[]')),
-    match_mode: db.getSetting('match_mode', 'hybrid'),
+    match_mode: db.getSetting('match_mode', 'fast_hash'),
     selected_tracker_hosts: db.getSetting('selected_tracker_hosts', []),
     cross_seed_delay: parseFloat(db.getSetting('cross_seed_delay', '30')),
     scan_on_startup: db.getSetting('scan_on_startup', true),

@@ -45,7 +45,7 @@ export default function Settings() {
     qbit_user: '',
     qbit_password: '',
     has_qbit_pass: false,
-    match_mode: 'hybrid',
+    match_mode: 'fast_hash',
     cross_seed_url: '',
     cross_seed_api_key: '',
     upload_command: '',
