@@ -170,15 +170,9 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
       ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s` 
       : `${etaSeconds}s`;
 
-    if (sendEvent) {
-      sendEvent('progress', { 
-        global: true, 
-        step: `Indexing Hardlinks (${currentCount}/${torrents.length}) - noch ca. ${etaFormatted}...`, 
-        progress: pct 
-      });
-    }
+    if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${currentCount}/${torrents.length}) - noch ca. ${etaFormatted}...`, progress: pct });
     
-    if (currentScanState.cancelRequested) return inodeIndex;
+    checkCancel();
     await new Promise(resolve => setImmediate(resolve));
   }
   
@@ -298,7 +292,7 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
       });
     }
     
-    if (currentScanState.cancelRequested) return hashIndex;
+    checkCancel();
     await new Promise(resolve => setImmediate(resolve));
   }
 
@@ -547,6 +541,13 @@ function torrentHasTracker(torrent, selectedTrackerHosts) {
 // Scan orchestration
 // ---------------------------------------------------------------------------
 
+function checkCancel() {
+  if (currentScanState.cancelRequested) {
+    throw new Error('Scan cancelled by user');
+  }
+}
+
+
 let lastScanResults = { media: [], tags: [], trackerHosts: [], timestamp: null };
 let scanListeners = new Set();
 let currentScanState = { isScanning: false, cancelRequested: false, globalStep: 'Idle', globalProgress: 0, instances: {} };
@@ -608,40 +609,41 @@ async function scanMedia(sendEvent) {
     }
   };
 
-  console.log('Scanner: scanMedia initiated.');
+  try {
+    console.log('Scanner: scanMedia initiated.');
   currentScanState.cancelRequested = false;
   internalSendEvent('progress', { global: true, step: 'Initializing', progress: 0 });
 
-  const qbitUrl      = db.getSetting('qbit_url', '');
-  const qbitUser     = db.getSetting('qbit_user', '');
-  const qbitPass     = db.getSetting('qbit_password', '');
-  const matchMode    = db.getSetting('match_mode', 'hardlink'); // 'hardlink' | 'fast_hash' | 'hybrid' | 'name_then_size' | 'name_only' | 'size_only'
-  const selectedTrackerHosts = db.getSetting('selected_tracker_hosts', []); // [] = no filter (all)
-  const pathReplaceFrom = db.getSetting('path_replace_from', '');
-  const pathReplaceTo   = db.getSetting('path_replace_to', '');
+    const qbitUrl      = db.getSetting('qbit_url', '');
+    const qbitUser     = db.getSetting('qbit_user', '');
+    const qbitPass     = db.getSetting('qbit_password', '');
+    const matchMode    = db.getSetting('match_mode', 'hardlink'); // 'hardlink' | 'fast_hash' | 'hybrid' | 'name_then_size' | 'name_only' | 'size_only'
+    const selectedTrackerHosts = db.getSetting('selected_tracker_hosts', []); // [] = no filter (all)
+    const pathReplaceFrom = db.getSetting('path_replace_from', '');
+    const pathReplaceTo   = db.getSetting('path_replace_to', '');
 
-  if (!qbitUrl) throw new Error('qBittorrent is not configured.');
+    if (!qbitUrl) throw new Error('qBittorrent is not configured.');
 
-  internalSendEvent('progress', { global: true, step: 'Logging into qBittorrent...', progress: 10 });
-  console.log(`Logging into qBittorrent at ${qbitUrl}...`);
-  const cookie = await getQbitAuthCookie(qbitUrl, qbitUser, qbitPass);
+    internalSendEvent('progress', { global: true, step: 'Logging into qBittorrent...', progress: 10 });
+    console.log(`Logging into qBittorrent at ${qbitUrl}...`);
+    const cookie = await getQbitAuthCookie(qbitUrl, qbitUser, qbitPass);
 
-  internalSendEvent('progress', { global: true, step: 'Fetching qBittorrent Torrents...', progress: 15 });
-  console.log('Fetching torrent list from qBittorrent...');
-  let allTorrents = await getQbitTorrents(qbitUrl, cookie);
-  console.log(`Fetched ${allTorrents.length} torrents.`);
+    internalSendEvent('progress', { global: true, step: 'Fetching qBittorrent Torrents...', progress: 15 });
+    console.log('Fetching torrent list from qBittorrent...');
+    let allTorrents = await getQbitTorrents(qbitUrl, cookie);
+    console.log(`Fetched ${allTorrents.length} torrents.`);
 
-  const allTags = new Set();
-  const allTrackerHosts = new Set();
+    const allTags = new Set();
+    const allTrackerHosts = new Set();
 
-  // Pre-sanitize torrent names
-  allTorrents.forEach(t => {
-    // Strip video extension for single-file torrents (e.g. "Movie.2022.mkv" → "Movie.2022")
-    // so they match Radarr/Sonarr scene names which never include the extension.
-    const strippedName = t.name.replace(/\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|iso)$/i, '');
-    t.sName = sanitizeString(strippedName);
-    if (t.tags) t.tags.split(',').forEach(tag => allTags.add(tag.trim()));
-  });
+    // Pre-sanitize torrent names
+    allTorrents.forEach(t => {
+      // Strip video extension for single-file torrents (e.g. "Movie.2022.mkv" → "Movie.2022")
+      // so they match Radarr/Sonarr scene names which never include the extension.
+      const strippedName = t.name.replace(/\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|iso)$/i, '');
+      t.sName = sanitizeString(strippedName);
+      if (t.tags) t.tags.split(',').forEach(tag => allTags.add(tag.trim()));
+    });
 
   // Pre-fetch tracker hosts for tracker-filtered scan
   internalSendEvent('progress', { global: true, step: 'Fetching tracker info (UI may be slow)...', progress: 18 });
@@ -670,7 +672,7 @@ async function scanMedia(sendEvent) {
       }
     }));
     
-    if (currentScanState.cancelRequested) break;
+    checkCancel();
     // Yield to event loop after each batch
     await new Promise(resolve => setImmediate(resolve));
   }
@@ -685,7 +687,7 @@ async function scanMedia(sendEvent) {
   internalSendEvent('progress', { global: true, step: `Starting file index (${torrents.length} items)...`, progress: 25 });
   await new Promise(resolve => setImmediate(resolve)); // Yield to flush messages
 
-  if (currentScanState.cancelRequested) throw new Error('Scan cancelled by user');
+  checkCancel();
 
   // Build inode index when hardlink mode is active
   let inodeIndex = null;
@@ -730,7 +732,7 @@ async function scanMedia(sendEvent) {
       const movies = await getRadarrMovies(instance);
 
       for (let i = 0; i < movies.length; i++) {
-        if (currentScanState.cancelRequested) break;
+        checkCancel();
         const movie = movies[i];
         
         // Update UI and yield every 10 items to reduce overhead
@@ -842,7 +844,7 @@ async function scanMedia(sendEvent) {
       const series = await getSonarrSeries(instance);
 
       for (let i = 0; i < series.length; i++) {
-        if (currentScanState.cancelRequested) break;
+        checkCancel();
         const show = series[i];
 
         // Update UI and yield every 10 items to reduce overhead
@@ -994,8 +996,13 @@ async function scanMedia(sendEvent) {
   lastScanResults = finalResults;
   db.setSetting('last_results', JSON.stringify(finalResults));
 
-  internalSendEvent('complete', finalResults);
-  return finalResults;
+    internalSendEvent('complete', finalResults);
+    return finalResults;
+  } catch (err) {
+    console.error('Scanner: scanMedia error:', err);
+    internalSendEvent('error', { message: err.message });
+    throw err;
+  }
 }
 
 function getLastResults() {
