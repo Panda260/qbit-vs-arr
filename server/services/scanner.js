@@ -161,6 +161,8 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
     const currentCount = Math.min(i + BATCH_SIZE, torrents.length);
     const pct = Math.min(40, 20 + Math.floor((currentCount / torrents.length) * 20));
     if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${currentCount}/${torrents.length})...`, progress: pct });
+    
+    if (currentScanState.cancelRequested) return inodeIndex;
     await new Promise(resolve => setImmediate(resolve));
   }
   
@@ -263,6 +265,8 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
     const currentCount = Math.min(i + BATCH_SIZE, torrents.length);
     const pct = Math.min(40, 20 + Math.floor((currentCount / torrents.length) * 20));
     if (sendEvent) sendEvent('progress', { global: true, step: `Calculating Hashes (${currentCount}/${torrents.length})...`, progress: pct });
+    
+    if (currentScanState.cancelRequested) return hashIndex;
     await new Promise(resolve => setImmediate(resolve));
   }
 
@@ -513,10 +517,16 @@ function torrentHasTracker(torrent, selectedTrackerHosts) {
 
 let lastScanResults = { media: [], tags: [], trackerHosts: [], timestamp: null };
 let scanListeners = new Set();
-let currentScanState = { isScanning: false, globalStep: 'Idle', globalProgress: 0, instances: {} };
+let currentScanState = { isScanning: false, cancelRequested: false, globalStep: 'Idle', globalProgress: 0, instances: {} };
 
 function getScannerState() {
   return currentScanState;
+}
+
+function cancelScan() {
+  if (currentScanState.isScanning) {
+    currentScanState.cancelRequested = true;
+  }
 }
 
 function addScanListener(listener) {
@@ -567,6 +577,7 @@ async function scanMedia(sendEvent) {
   };
 
   console.log('Scanner: scanMedia initiated.');
+  currentScanState.cancelRequested = false;
   internalSendEvent('progress', { global: true, step: 'Initializing', progress: 0 });
 
   const qbitUrl      = db.getSetting('qbit_url', '');
@@ -627,6 +638,7 @@ async function scanMedia(sendEvent) {
       }
     }));
     
+    if (currentScanState.cancelRequested) break;
     // Yield to event loop after each batch
     await new Promise(resolve => setImmediate(resolve));
   }
@@ -641,7 +653,7 @@ async function scanMedia(sendEvent) {
   internalSendEvent('progress', { global: true, step: `Starting file index (${torrents.length} items)...`, progress: 25 });
   await new Promise(resolve => setImmediate(resolve)); // Yield to flush messages
 
-  console.log(`Tracker filter: ${selectedTrackerHosts.length > 0 ? selectedTrackerHosts.join(',') : 'none'} → ${torrents.length}/${allTorrents.length} torrents active`);
+  if (currentScanState.cancelRequested) throw new Error('Scan cancelled by user');
 
   // Build inode index when hardlink mode is active
   let inodeIndex = null;
@@ -678,13 +690,15 @@ async function scanMedia(sendEvent) {
       internalSendEvent('progress', { instanceName: instance.name, step, progress });
     };
 
-    instanceSendEvent(`Starting scan...`, 0);
+    if (currentScanState.cancelRequested) return [];
+
     console.log(`Starting scan of instance: ${instance.name} (${instance.type})`);
 
     if (instance.type === 'radarr') {
       const movies = await getRadarrMovies(instance);
 
       for (let i = 0; i < movies.length; i++) {
+        if (currentScanState.cancelRequested) break;
         const movie = movies[i];
         const itemProgress = Math.floor(((i + 1) / movies.length) * 100);
         instanceSendEvent(`[${i + 1}/${movies.length}] ${movie.title}`, Math.min(99, itemProgress));
@@ -792,6 +806,7 @@ async function scanMedia(sendEvent) {
       const series = await getSonarrSeries(instance);
 
       for (let i = 0; i < series.length; i++) {
+        if (currentScanState.cancelRequested) break;
         const show = series[i];
         const itemProgress = Math.floor(((i + 1) / series.length) * 100);
         instanceSendEvent(`[${i + 1}/${series.length}] ${show.title}`, Math.min(99, itemProgress));
@@ -908,8 +923,16 @@ async function scanMedia(sendEvent) {
     return instanceResults;
   });
 
-  const allResultsNested = await Promise.all(instancePromises);
-  const results = allResultsNested.flat();
+  let finalMedia = [];
+  for (const res of await Promise.all(instancePromises)) {
+    if (res) finalMedia = finalMedia.concat(res);
+  }
+
+  if (currentScanState.cancelRequested) {
+    throw new Error('Scan cancelled by user');
+  }
+
+  const results = finalMedia;
 
   internalSendEvent('progress', { global: true, step: 'Finalizing...', progress: 100 });
 
@@ -963,13 +986,14 @@ async function fetchTrackerHosts(url, username, password) {
   return getAllTrackerUrls(url, cookie, torrents);
 }
 
-module.exports = { 
-  scanMedia, 
-  getLastResults, 
-  testQbit, 
-  testArr, 
-  fetchTrackerHosts,
+module.exports = {
+  scanMedia,
   getScannerState,
+  cancelScan,
   addScanListener,
-  removeScanListener
+  removeScanListener,
+  getLastResults,
+  testQbit,
+  testArr,
+  fetchTrackerHosts
 };

@@ -148,6 +148,12 @@ export default function Dashboard() {
     });
   };
 
+  const cancelScan = async () => {
+    try {
+      await axios.post('/api/scan/cancel');
+    } catch (err) { console.error('Failed to cancel scan', err); }
+  };
+
   const checkScanStatus = async () => {
     try {
       const res = await axios.get('/scan-status');
@@ -286,10 +292,17 @@ export default function Dashboard() {
             </p>
           )}
         </div>
-        <button onClick={() => handleScan(true)} disabled={scanState.isScanning} className="btn btn-primary">
-          {scanState.isScanning ? <Search size={18} className="animate-spin" /> : <Play size={18} />}
-          {scanState.isScanning ? 'Scanning...' : 'Start Scan'}
-        </button>
+        <div className="flex gap-2">
+          {!scanState.isScanning ? (
+            <button onClick={() => handleScan(true)} className="btn btn-primary">
+              <Play size={18} /> Start Scan
+            </button>
+          ) : (
+            <button onClick={cancelScan} className="btn btn-danger">
+              <XCircle size={18} /> Cancel Scan
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Progress */}

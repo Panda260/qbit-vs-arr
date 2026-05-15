@@ -150,6 +150,12 @@ router.get('/scan', async (req, res) => {
   }
 });
 
+router.post('/scan/cancel', (req, res) => {
+  const { cancelScan } = require('../services/scanner');
+  cancelScan();
+  res.json({ success: true });
+});
+
 // --- cross-seed ---
 const { startSearchAll, cancelSearchAll, getSearchAllStatus } = require('../services/crossSeedSearch');
 
