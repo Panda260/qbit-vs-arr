@@ -152,9 +152,10 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
       }
     } catch { skipped++; }
 
-    if ((i + 1) % 50 === 0 && sendEvent) {
-      const pct = Math.min(30, 20 + Math.floor(((i + 1) / torrents.length) * 10));
-      sendEvent('progress', { global: true, step: `Building inode index... (${i + 1}/${torrents.length})`, progress: pct });
+    // Update UI more frequently (every 5 items)
+    if ((i + 1) % 5 === 0 || (i + 1) === torrents.length) {
+      const pct = Math.min(40, 20 + Math.floor(((i + 1) / torrents.length) * 20));
+      if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${i + 1}/${torrents.length})...`, progress: pct });
     }
   }
   console.log(`Inode index built: ${inodeIndex.size} unique video files indexed, ${skipped} torrent paths inaccessible.`);
@@ -247,9 +248,10 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
       }
     } catch { /* skip */ }
 
-    if ((i + 1) % 50 === 0 && sendEvent) {
-      const pct = Math.min(30, 20 + Math.floor(((i + 1) / torrents.length) * 10));
-      sendEvent('progress', { global: true, step: `Building hash index... (${i + 1}/${torrents.length})`, progress: pct });
+    // Update UI more frequently (every 5 items)
+    if ((i + 1) % 5 === 0 || (i + 1) === torrents.length) {
+      const pct = Math.min(40, 20 + Math.floor(((i + 1) / torrents.length) * 20));
+      if (sendEvent) sendEvent('progress', { global: true, step: `Calculating Hashes (${i + 1}/${torrents.length})...`, progress: pct });
     }
   }
   console.log(`Partial hash index built: ${hashIndex.size} files indexed.`);
@@ -617,11 +619,14 @@ async function scanMedia(sendEvent) {
     await new Promise(resolve => setImmediate(resolve));
   }
   console.log('Finished fetching tracker info.');
+  internalSendEvent('progress', { global: true, step: 'Applying tracker filters...', progress: 24 });
 
   // Apply tracker filter: only consider torrents matching selected tracker hosts
   const torrents = selectedTrackerHosts.length > 0
     ? allTorrents.filter(t => torrentHasTracker(t, selectedTrackerHosts))
     : allTorrents;
+
+  internalSendEvent('progress', { global: true, step: `Starting file index (${torrents.length} items)...`, progress: 25 });
 
   console.log(`Tracker filter: ${selectedTrackerHosts.length > 0 ? selectedTrackerHosts.join(',') : 'none'} → ${torrents.length}/${allTorrents.length} torrents active`);
 
