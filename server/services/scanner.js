@@ -106,24 +106,24 @@ function rewritePath(p, from, to) {
 }
 
 /** Recursively walk a directory and index all video files by inode. */
-function walkDirForVideos(dirPath, torrent, inodeIndex) {
+async function walkDirForVideos(dirPath, torrent, inodeIndex) {
   try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = nodePath.join(dirPath, entry.name);
       if (entry.isDirectory()) {
-        walkDirForVideos(fullPath, torrent, inodeIndex);
+        await walkDirForVideos(fullPath, torrent, inodeIndex);
       } else if (entry.isFile() && VIDEO_EXTENSIONS.test(entry.name)) {
         try {
-          const st = fs.statSync(fullPath);
+          const st = await fs.promises.stat(fullPath);
           if (st.size >= MKV_MIN_SIZE_BYTES) {
             const key = `${st.dev}:${st.ino}`;
             if (!inodeIndex.has(key)) inodeIndex.set(key, torrent);
           }
-        } catch { /* inaccessible file, skip */ }
+        } catch { /* skip */ }
       }
     }
-  } catch { /* inaccessible dir, skip */ }
+  } catch { /* skip */ }
 }
 
 /**
@@ -136,30 +136,34 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
   if (sendEvent) sendEvent('progress', { global: true, step: `Building hardlink inode index for ${torrents.length} torrents...`, progress: 20 });
 
   let skipped = 0;
-  for (let i = 0; i < torrents.length; i++) {
-    const torrent = torrents[i];
-    const rawPath = torrent.content_path;
-    if (!rawPath) continue;
-    const localPath = rewritePath(rawPath, pathFrom, pathTo);
-    try {
-      const st = fs.statSync(localPath);
-      if (st.isFile()) {
-        if (VIDEO_EXTENSIONS.test(localPath) && st.size >= MKV_MIN_SIZE_BYTES) {
-          const key = `${st.dev}:${st.ino}`;
-          if (!inodeIndex.has(key)) inodeIndex.set(key, torrent);
+  const BATCH_SIZE = 50; // stat is very fast, can use larger batches
+  for (let i = 0; i < torrents.length; i += BATCH_SIZE) {
+    const batch = torrents.slice(i, i + BATCH_SIZE);
+    
+    await Promise.all(batch.map(async (torrent) => {
+      const rawPath = torrent.content_path;
+      if (!rawPath) return;
+      const localPath = rewritePath(rawPath, pathFrom, pathTo);
+      try {
+        const st = await fs.promises.stat(localPath);
+        if (st.isFile()) {
+          if (VIDEO_EXTENSIONS.test(localPath) && st.size >= MKV_MIN_SIZE_BYTES) {
+            const key = `${st.dev}:${st.ino}`;
+            if (!inodeIndex.has(key)) inodeIndex.set(key, torrent);
+          }
+        } else if (st.isDirectory()) {
+          await walkDirForVideos(localPath, torrent, inodeIndex);
         }
-      } else if (st.isDirectory()) {
-        walkDirForVideos(localPath, torrent, inodeIndex);
-      }
-    } catch { skipped++; }
+      } catch { skipped++; }
+    }));
 
-    // Update UI more frequently (every 5 items) and yield
-    if ((i + 1) % 5 === 0 || (i + 1) === torrents.length) {
-      await new Promise(resolve => setImmediate(resolve));
-      const pct = Math.min(40, 20 + Math.floor(((i + 1) / torrents.length) * 20));
-      if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${i + 1}/${torrents.length})...`, progress: pct });
-    }
+    // Update UI and yield
+    const currentCount = Math.min(i + BATCH_SIZE, torrents.length);
+    const pct = Math.min(40, 20 + Math.floor((currentCount / torrents.length) * 20));
+    if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${currentCount}/${torrents.length})...`, progress: pct });
+    await new Promise(resolve => setImmediate(resolve));
   }
+  
   console.log(`Inode index built: ${inodeIndex.size} unique video files indexed, ${skipped} torrent paths inaccessible.`);
   return inodeIndex;
 }
@@ -188,21 +192,21 @@ function matchByInode(inodeIndex, filePath, pathFrom, pathTo) {
 
 const HASH_SAMPLE_SIZE = 1 * 1024 * 1024; // 1MB
 
-function calculatePartialHash(filePath) {
+async function calculatePartialHash(filePath) {
   try {
-    const stats = fs.statSync(filePath);
+    const stats = await fs.promises.stat(filePath);
     if (!stats.isFile() || stats.size < MKV_MIN_SIZE_BYTES) return null;
 
-    const fd = fs.openSync(filePath, 'r');
+    const fileHandle = await fs.promises.open(filePath, 'r');
     const head = Buffer.alloc(HASH_SAMPLE_SIZE);
-    fs.readSync(fd, head, 0, HASH_SAMPLE_SIZE, 0);
+    await fileHandle.read(head, 0, HASH_SAMPLE_SIZE, 0);
 
     let tail = Buffer.alloc(0);
     if (stats.size > HASH_SAMPLE_SIZE * 2) {
       tail = Buffer.alloc(HASH_SAMPLE_SIZE);
-      fs.readSync(fd, tail, 0, HASH_SAMPLE_SIZE, stats.size - HASH_SAMPLE_SIZE);
+      await fileHandle.read(tail, 0, HASH_SAMPLE_SIZE, stats.size - HASH_SAMPLE_SIZE);
     }
-    fs.closeSync(fd);
+    await fileHandle.close();
 
     const hash = crypto.createHash('md5')
       .update(head)
@@ -216,17 +220,17 @@ function calculatePartialHash(filePath) {
 }
 
 /** Recursively walk a directory and index all video files by partial hash. */
-function walkDirForHashes(dirPath, torrent, hashIndex) {
+async function walkDirForHashes(dirPath, torrent, hashIndex) {
   try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = nodePath.join(dirPath, entry.name);
       if (entry.isDirectory()) {
-        walkDirForHashes(fullPath, torrent, hashIndex);
+        await walkDirForHashes(fullPath, torrent, hashIndex);
       } else if (entry.isFile() && VIDEO_EXTENSIONS.test(entry.name)) {
-        const hashKey = calculatePartialHash(fullPath);
-        if (hashKey) {
-          if (!hashIndex.has(hashKey)) hashIndex.set(hashKey, torrent);
+        const hashKey = await calculatePartialHash(fullPath);
+        if (hashKey && !hashIndex.has(hashKey)) {
+          hashIndex.set(hashKey, torrent);
         }
       }
     }
@@ -238,26 +242,30 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
   const hashIndex = new Map();
   if (sendEvent) sendEvent('progress', { global: true, step: `Building partial hash index for ${torrents.length} torrents...`, progress: 20 });
 
-  for (let i = 0; i < torrents.length; i++) {
-    const torrent = torrents[i];
-    const localPath = rewritePath(torrent.content_path, pathFrom, pathTo);
-    try {
-      const st = fs.statSync(localPath);
-      if (st.isFile()) {
-        const hashKey = calculatePartialHash(localPath);
-        if (hashKey && !hashIndex.has(hashKey)) hashIndex.set(hashKey, torrent);
-      } else if (st.isDirectory()) {
-        walkDirForHashes(localPath, torrent, hashIndex);
-      }
-    } catch { /* skip */ }
+  const BATCH_SIZE = 15; // Balanced for both HDD and SSD
+  for (let i = 0; i < torrents.length; i += BATCH_SIZE) {
+    const batch = torrents.slice(i, i + BATCH_SIZE);
+    
+    await Promise.all(batch.map(async (torrent) => {
+      const localPath = rewritePath(torrent.content_path, pathFrom, pathTo);
+      try {
+        const st = await fs.promises.stat(localPath);
+        if (st.isFile()) {
+          const hashKey = await calculatePartialHash(localPath);
+          if (hashKey && !hashIndex.has(hashKey)) hashIndex.set(hashKey, torrent);
+        } else if (st.isDirectory()) {
+          await walkDirForHashes(localPath, torrent, hashIndex);
+        }
+      } catch { /* skip */ }
+    }));
 
-    // Update UI more frequently (every 5 items) and yield
-    if ((i + 1) % 5 === 0 || (i + 1) === torrents.length) {
-      await new Promise(resolve => setImmediate(resolve));
-      const pct = Math.min(40, 20 + Math.floor(((i + 1) / torrents.length) * 20));
-      if (sendEvent) sendEvent('progress', { global: true, step: `Calculating Hashes (${i + 1}/${torrents.length})...`, progress: pct });
-    }
+    // Update UI and yield
+    const currentCount = Math.min(i + BATCH_SIZE, torrents.length);
+    const pct = Math.min(40, 20 + Math.floor((currentCount / torrents.length) * 20));
+    if (sendEvent) sendEvent('progress', { global: true, step: `Calculating Hashes (${currentCount}/${torrents.length})...`, progress: pct });
+    await new Promise(resolve => setImmediate(resolve));
   }
+
   console.log(`Partial hash index built: ${hashIndex.size} files indexed.`);
   return hashIndex;
 }

@@ -57,6 +57,39 @@ On your first visit, navigate to the **Settings** page:
 
 *Note: All configuration data, including your Ignore List and API keys, are securely stored inside the `./data/` volume and persist across container restarts.*
 
+## Matching Modes Comparison
+
+qbit-vs-arr bietet verschiedene Strategien, um deine Medien mit den laufenden Torrents abzugleichen. Hier ist ein detaillierter Vergleich:
+
+| Modus | Technik | Geschwindigkeit | Genauigkeit | Fehler-Risiko | Voraussetzung |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Hardlink (Inode)** | Dateisystem-ID | 🚀 Ultraschnell | 💎 100% | 0% | Lesezugriff auf Medien + Torrents. Hardlinks in *Arr aktiv. |
+| **Fast Hash (Partial)** | Header/Footer Checksum | ⚡ Schnell | 🏆 99.9% | < 0.01% | Lesezugriff auf Medien + Torrents. |
+| **Hybrid** | History-API + Name | 🟢 Schnell | ✅ Hoch | Niedrig | API-Zugriff auf *Arr Instanzen. |
+| **Name Only** | String-Normalisierung | 🟢 Schnell | 🆗 Mittel | Mittel | Keine speziellen Anforderungen. |
+| **Size Only** | Byte-Vergleich | 🟢 Schnell | ⚠️ Gering | Hoch | Keine speziellen Anforderungen. |
+
+### Details zu den Modi
+
+#### 🔗 Hardlink (Inode Match) — *Empfohlen*
+Der Goldstandard für *Arr-Setups. Diese Methode prüft, ob die Mediendatei und die Torrent-Datei auf die exakt gleiche Stelle auf der Festplatte zeigen (dieselbe Inode). 
+- **Vorteil:** Es wird kein einziges Byte der Datei gelesen. Der Check ist manipulationssicher.
+- **Wann nutzen?** Immer, wenn Radarr/Sonarr Hardlinks verwenden (Standard) und beide Verzeichnisse auf derselben Partition liegen.
+
+#### ⚡ Fast Hash (Partial Checksum)
+Der Scanner liest jeweils das erste und das letzte Megabyte einer Datei und erstellt daraus einen eindeutigen Fingerabdruck.
+- **Vorteil:** Erkennt identische Dateien auch dann, wenn sie **keine** Hardlinks sind (z. B. einfache Kopien).
+- **Geschwindigkeit:** Muss Daten von der Festplatte lesen (~2MB pro Datei). Bei vielen Dateien kann I/O (Disk-Speed) zum Flaschenhals werden.
+
+#### 🕒 Hybrid (History + Name)
+Fragt zuerst die interne Historie von Radarr/Sonarr ab, um den exakten Release-Namen ("Grabbed Event") zu finden und gleicht diesen ab. Falls nichts gefunden wird, folgt ein normalisierter Namensvergleich.
+- **Vorteil:** Sehr robust gegenüber Umbenennungen, solange die Historie in der Datenbank vorhanden ist.
+
+#### 🏷️ Name Only / Size Only
+Einfache Vergleichsmethoden. 
+- **Name Only:** Normalisiert Dateinamen (entfernt Punkte, Leerzeichen, Group-Tags) und vergleicht sie.
+- **Size Only:** Prüft nur die exakte Dateigröße bis auf das Byte genau. **Achtung:** Es gibt ein Risiko für "False Positives", wenn zwei verschiedene Releases zufällig exakt die gleiche Größe haben.
+
 ## Technologies
 - **Frontend**: React, Vite
 - **Backend**: Node.js, Express
