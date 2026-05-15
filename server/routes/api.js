@@ -38,7 +38,9 @@ router.get('/settings', (req, res) => {
     match_mode: db.getSetting('match_mode', 'hybrid'),
     selected_tracker_hosts: db.getSetting('selected_tracker_hosts', []),
     cross_seed_delay: parseFloat(db.getSetting('cross_seed_delay', '30')),
-    scan_on_startup: db.getSetting('scan_on_startup', true)
+    scan_on_startup: db.getSetting('scan_on_startup', true),
+    path_replace_from: db.getSetting('path_replace_from', ''),
+    path_replace_to: db.getSetting('path_replace_to', '')
   });
 });
 
@@ -65,6 +67,10 @@ router.post('/settings', (req, res) => {
   if (match_mode !== undefined)            db.setSetting('match_mode', match_mode);
   if (ignored_keywords !== undefined)      db.setSetting('ignored_keywords', JSON.stringify(ignored_keywords));
   if (selected_tracker_hosts !== undefined) db.setSetting('selected_tracker_hosts', selected_tracker_hosts);
+
+  const { path_replace_from, path_replace_to } = req.body;
+  if (path_replace_from !== undefined)     db.setSetting('path_replace_from', path_replace_from);
+  if (path_replace_to !== undefined)       db.setSetting('path_replace_to', path_replace_to);
 
   res.json({ success: true });
 });

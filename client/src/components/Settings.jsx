@@ -9,6 +9,11 @@ const MATCH_MODES = [
     description: 'Fetches the most recent "grabbed" event from Radarr/Sonarr history to get the exact scene/release name, then matches it against the qBittorrent torrent name. Falls back to sanitized name matching if no history found. Most reliable for NZB + Torrent mixed setups.',
   },
   {
+    value: 'hardlink',
+    label: '🔗 Hardlink: Inode Match (Most Accurate)',
+    description: 'Detects hardlinks between your media files and torrent files using inode comparison — only stat() calls, no file content is read. Requires the container to have read access to both media and torrent directories. Falls back to Hybrid (History + Name) if no hardlink is found.',
+  },
+  {
     value: 'name_then_size',
     label: '🏷️ Name → Size Fallback',
     description: 'Matches by sanitized release name first (fast). If no name match is found, falls back to exact video file size matching. Cross-seed duplicates with the same release name are correctly identified. Good default for pure torrent setups.',
@@ -41,6 +46,8 @@ export default function Settings() {
     upload_command: '',
     cross_seed_delay: 30,
     scan_on_startup: true,
+    path_replace_from: '',
+    path_replace_to: '',
   });
 
   const [instances, setInstances] = useState([]);
@@ -208,6 +215,41 @@ export default function Settings() {
             <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid var(--glass-border)', fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
               {currentMode.description}
             </div>
+
+            {/* Hardlink path mapping (only shown in hardlink mode) */}
+            {settings.match_mode === 'hardlink' && (
+              <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(6,182,212,0.05)', borderRadius: '8px', border: '1px solid rgba(6,182,212,0.2)' }}>
+                <p style={{ fontSize: '0.82rem', color: '#67e8f9', marginBottom: '0.75rem', fontWeight: 600 }}>🔗 Hardlink Path Mapping</p>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: '1.5' }}>
+                  If qBit/Arr use different path prefixes than this container, set a prefix replacement below.
+                  <br />Example: qBit uses <code>/downloads</code>, but here it's mounted at <code>/data/torrents</code>.
+                  <br />Leave both empty if paths are identical in all containers.
+                </p>
+                <div className="form-group" style={{ marginBottom: '0.5rem' }}>
+                  <label style={{ fontSize: '0.8rem' }}>Replace prefix (as seen by qBit/Arr)</label>
+                  <input
+                    type="text"
+                    value={settings.path_replace_from || ''}
+                    onChange={e => setSettings({ ...settings, path_replace_from: e.target.value })}
+                    placeholder="/downloads"
+                    style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label style={{ fontSize: '0.8rem' }}>With prefix (as mounted in this container)</label>
+                  <input
+                    type="text"
+                    value={settings.path_replace_to || ''}
+                    onChange={e => setSettings({ ...settings, path_replace_to: e.target.value })}
+                    placeholder="/data/torrents"
+                    style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                  />
+                </div>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                  💡 Docker Compose: mount your media and torrent folders into this container with <code>:ro</code> (read-only).
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Single Save Button */}

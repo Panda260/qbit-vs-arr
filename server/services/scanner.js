@@ -1,4 +1,6 @@
 const axios = require('axios');
+const fs = require('fs');
+const nodePath = require('path');
 const db = require('./db');
 
 // ---------------------------------------------------------------------------
@@ -86,11 +88,95 @@ async function getAllTrackerUrls(url, cookie, torrents) {
 }
 
 // ---------------------------------------------------------------------------
-// Size index builder
+// Inode (hardlink) index builder
 // ---------------------------------------------------------------------------
 
 const MKV_MIN_SIZE_BYTES = 100 * 1024 * 1024;
 const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|iso)$/i;
+
+/**
+ * Optionally rewrite a path prefix, e.g. /downloads → /data/torrents.
+ * Used when qBit/Arr paths differ from the paths visible in this container.
+ */
+function rewritePath(p, from, to) {
+  if (!from || !to || !p) return p;
+  if (p.startsWith(from)) return to + p.slice(from.length);
+  return p;
+}
+
+/** Recursively walk a directory and index all video files by inode. */
+function walkDirForVideos(dirPath, torrent, inodeIndex) {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = nodePath.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        walkDirForVideos(fullPath, torrent, inodeIndex);
+      } else if (entry.isFile() && VIDEO_EXTENSIONS.test(entry.name)) {
+        try {
+          const st = fs.statSync(fullPath);
+          if (st.size >= MKV_MIN_SIZE_BYTES) {
+            const key = `${st.dev}:${st.ino}`;
+            if (!inodeIndex.has(key)) inodeIndex.set(key, torrent);
+          }
+        } catch { /* inaccessible file, skip */ }
+      }
+    }
+  } catch { /* inaccessible dir, skip */ }
+}
+
+/**
+ * Build a Map of "dev:ino" → torrent for all video files in each torrent's
+ * content_path. Uses only stat() — no file content is read.
+ */
+async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
+  const inodeIndex = new Map();
+  if (sendEvent) sendEvent('progress', { global: true, step: `Building hardlink inode index for ${torrents.length} torrents...`, progress: 20 });
+
+  let skipped = 0;
+  for (let i = 0; i < torrents.length; i++) {
+    const torrent = torrents[i];
+    const rawPath = torrent.content_path;
+    if (!rawPath) continue;
+    const localPath = rewritePath(rawPath, pathFrom, pathTo);
+    try {
+      const st = fs.statSync(localPath);
+      if (st.isFile()) {
+        if (VIDEO_EXTENSIONS.test(localPath) && st.size >= MKV_MIN_SIZE_BYTES) {
+          const key = `${st.dev}:${st.ino}`;
+          if (!inodeIndex.has(key)) inodeIndex.set(key, torrent);
+        }
+      } else if (st.isDirectory()) {
+        walkDirForVideos(localPath, torrent, inodeIndex);
+      }
+    } catch { skipped++; }
+
+    if ((i + 1) % 50 === 0 && sendEvent) {
+      const pct = Math.min(30, 20 + Math.floor(((i + 1) / torrents.length) * 10));
+      sendEvent('progress', { global: true, step: `Building inode index... (${i + 1}/${torrents.length})`, progress: pct });
+    }
+  }
+  console.log(`Inode index built: ${inodeIndex.size} unique video files indexed, ${skipped} torrent paths inaccessible.`);
+  return inodeIndex;
+}
+
+/**
+ * Check if a given file path shares an inode with any torrent in the index.
+ * Returns the matching torrent or null.
+ * Uses nlink > 1 as a fast pre-check (no hardlinks → skip immediately).
+ */
+function matchByInode(inodeIndex, filePath, pathFrom, pathTo) {
+  if (!filePath || !inodeIndex || inodeIndex.size === 0) return null;
+  const localPath = rewritePath(filePath, pathFrom, pathTo);
+  try {
+    const st = fs.statSync(localPath);
+    if (st.nlink <= 1) return null; // file has no hardlinks elsewhere
+    const key = `${st.dev}:${st.ino}`;
+    return inodeIndex.get(key) || null;
+  } catch {
+    return null;
+  }
+}
 
 async function buildSizeIndex(torrents, url, cookie, sendEvent) {
   const BATCH_SIZE = 20;
@@ -387,8 +473,10 @@ async function scanMedia(sendEvent) {
   const qbitUrl      = db.getSetting('qbit_url', '');
   const qbitUser     = db.getSetting('qbit_user', '');
   const qbitPass     = db.getSetting('qbit_password', '');
-  const matchMode    = db.getSetting('match_mode', 'hybrid'); // 'hybrid' | 'name_then_size' | 'name_only' | 'size_only'
+  const matchMode    = db.getSetting('match_mode', 'hybrid'); // 'hybrid' | 'name_then_size' | 'name_only' | 'size_only' | 'hardlink'
   const selectedTrackerHosts = db.getSetting('selected_tracker_hosts', []); // [] = no filter (all)
+  const pathReplaceFrom = db.getSetting('path_replace_from', '');
+  const pathReplaceTo   = db.getSetting('path_replace_to', '');
 
   if (!qbitUrl) throw new Error('qBittorrent is not configured.');
 
@@ -434,9 +522,17 @@ async function scanMedia(sendEvent) {
 
   console.log(`Tracker filter: ${selectedTrackerHosts.length > 0 ? selectedTrackerHosts.join(',') : 'none'} → ${torrents.length}/${allTorrents.length} torrents active`);
 
+  // Build inode index when hardlink mode is active
+  let inodeIndex = null;
+  if (matchMode === 'hardlink') {
+    inodeIndex = await buildInodeIndex(torrents, pathReplaceFrom, pathReplaceTo, (type, data) => {
+      internalSendEvent(type, { global: true, ...data });
+    });
+  }
+
   // Build size index when needed
   let sizeIndex = null;
-  if (matchMode !== 'name_only' && matchMode !== 'hybrid') {
+  if (matchMode !== 'name_only' && matchMode !== 'hybrid' && matchMode !== 'hardlink') {
     sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, (type, data) => {
       internalSendEvent(type, { global: true, ...data });
     });
@@ -474,10 +570,10 @@ async function scanMedia(sendEvent) {
           ? fileAliases
           : [movie.title, movie.originalTitle, movie.folderName].filter(Boolean);
 
-        // ── HYBRID MODE: fetch history ────────────────────────────
+        // ── HYBRID / HARDLINK MODE: fetch history ────────────────────────────
         let historySourceTitle = null;
         let historyTorrentHash = null;
-        if (matchMode === 'hybrid') {
+        if (matchMode === 'hybrid' || matchMode === 'hardlink') {
           const hist = await getRadarrMovieHistory(instance, movie.id);
           historySourceTitle = hist.sourceTitle;
           historyTorrentHash = hist.torrentHash;
@@ -494,9 +590,18 @@ async function scanMedia(sendEvent) {
         let matchingTorrents = [];
         let matchMethod = 'none';
 
-        // Step 0: Direct torrent hash match (hybrid only, qBit downloads)
+        // Step -1: Hardlink (inode) match — only stat() calls, no file reads
+        if (matchMode === 'hardlink' && inodeIndex && mf) {
+          const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
+          if (arrFilePath) {
+            const inoMatch = matchByInode(inodeIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+            if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; }
+          }
+        }
+
+        // Step 0: Direct torrent hash match (hybrid/hardlink, qBit downloads)
         // downloadId from Radarr IS the qBit info-hash — zero file reads, 100% accurate.
-        if (matchMode === 'hybrid' && historyTorrentHash) {
+        if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink') && historyTorrentHash) {
           const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
           if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
         }
@@ -504,7 +609,7 @@ async function scanMedia(sendEvent) {
         // Step 1: Name match (always try unless size_only or already matched)
         if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
           matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
-          if (matchingTorrents.length > 0) matchMethod = matchMode === 'hybrid' && historySourceTitle ? 'history' : 'name';
+          if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink') && historySourceTitle ? 'history' : 'name';
         }
 
         // Step 2: Size fallback
@@ -559,10 +664,10 @@ async function scanMedia(sendEvent) {
         let episodeFiles = [];
         try { episodeFiles = await getSonarrEpisodeFiles(instance, show.id); } catch {}
 
-        // HYBRID: get latest grabbed sourceTitle + torrentHash for the series
+        // HYBRID / HARDLINK: get latest grabbed sourceTitle + torrentHash for the series
         let historySourceTitle = null;
         let historyTorrentHash = null;
-        if (matchMode === 'hybrid') {
+        if (matchMode === 'hybrid' || matchMode === 'hardlink') {
           const hist = await getSonarrSeriesHistory(instance, show.id);
           historySourceTitle = hist.sourceTitle;
           historyTorrentHash = hist.torrentHash;
@@ -585,8 +690,18 @@ async function scanMedia(sendEvent) {
           let matchingTorrents = [];
           let matchMethod = 'none';
 
-          // Step 0: Direct hash match (hybrid + qBit download)
-          if (matchMode === 'hybrid' && historyTorrentHash) {
+          // Step -1: Hardlink (inode) match on episode files
+          if (matchMode === 'hardlink' && inodeIndex && seasonFiles.length > 0) {
+            for (const ef of seasonFiles) {
+              if (ef.path) {
+                const inoMatch = matchByInode(inodeIndex, ef.path, pathReplaceFrom, pathReplaceTo);
+                if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; break; }
+              }
+            }
+          }
+
+          // Step 0: Direct hash match (hybrid/hardlink + qBit download)
+          if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink') && historyTorrentHash) {
             const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
             if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
           }
@@ -596,7 +711,7 @@ async function scanMedia(sendEvent) {
             matchingTorrents = torrents.filter(t =>
               matchSanitized(sanitizedAliases, t.sName) && isSeasonMatch(t.name, sNum)
             );
-            if (matchingTorrents.length > 0) matchMethod = matchMode === 'hybrid' && historySourceTitle ? 'history' : 'name';
+            if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink') && historySourceTitle ? 'history' : 'name';
           }
 
           if (matchingTorrents.length === 0 && seasonFiles.length > 0) {
