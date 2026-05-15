@@ -131,6 +131,7 @@ function walkDirForVideos(dirPath, torrent, inodeIndex) {
  * content_path. Uses only stat() — no file content is read.
  */
 async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
+  console.log(`Building inode index for ${torrents.length} torrents...`);
   const inodeIndex = new Map();
   if (sendEvent) sendEvent('progress', { global: true, step: `Building hardlink inode index for ${torrents.length} torrents...`, progress: 20 });
 
@@ -152,8 +153,9 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
       }
     } catch { skipped++; }
 
-    // Update UI more frequently (every 5 items)
+    // Update UI more frequently (every 5 items) and yield
     if ((i + 1) % 5 === 0 || (i + 1) === torrents.length) {
+      await new Promise(resolve => setImmediate(resolve));
       const pct = Math.min(40, 20 + Math.floor(((i + 1) / torrents.length) * 20));
       if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${i + 1}/${torrents.length})...`, progress: pct });
     }
@@ -232,6 +234,7 @@ function walkDirForHashes(dirPath, torrent, hashIndex) {
 }
 
 async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
+  console.log(`Building fast hash index for ${torrents.length} torrents...`);
   const hashIndex = new Map();
   if (sendEvent) sendEvent('progress', { global: true, step: `Building partial hash index for ${torrents.length} torrents...`, progress: 20 });
 
@@ -248,8 +251,9 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
       }
     } catch { /* skip */ }
 
-    // Update UI more frequently (every 5 items)
+    // Update UI more frequently (every 5 items) and yield
     if ((i + 1) % 5 === 0 || (i + 1) === torrents.length) {
+      await new Promise(resolve => setImmediate(resolve));
       const pct = Math.min(40, 20 + Math.floor(((i + 1) / torrents.length) * 20));
       if (sendEvent) sendEvent('progress', { global: true, step: `Calculating Hashes (${i + 1}/${torrents.length})...`, progress: pct });
     }
@@ -627,6 +631,7 @@ async function scanMedia(sendEvent) {
     : allTorrents;
 
   internalSendEvent('progress', { global: true, step: `Starting file index (${torrents.length} items)...`, progress: 25 });
+  await new Promise(resolve => setImmediate(resolve)); // Yield to flush messages
 
   console.log(`Tracker filter: ${selectedTrackerHosts.length > 0 ? selectedTrackerHosts.join(',') : 'none'} → ${torrents.length}/${allTorrents.length} torrents active`);
 
