@@ -590,6 +590,7 @@ async function scanMedia(sendEvent) {
   internalSendEvent('progress', { global: true, step: 'Fetching tracker info (UI may be slow)...', progress: 18 });
   console.log('Fetching tracker information for all torrents...');
   const TRACKER_BATCH = 20;
+  let processedCount = 0;
   for (let i = 0; i < allTorrents.length; i += TRACKER_BATCH) {
     const batch = allTorrents.slice(i, i + TRACKER_BATCH);
     await Promise.all(batch.map(async (t) => {
@@ -599,18 +600,21 @@ async function scanMedia(sendEvent) {
         t._trackerHosts.forEach(h => allTrackerHosts.add(h));
       } catch (err) {
         console.error(`Failed to fetch trackers for ${t.name}:`, err.message);
+      } finally {
+        processedCount++;
+        // Update UI every 5 items to show constant progress without flooding the connection
+        if (processedCount % 5 === 0 || processedCount === allTorrents.length) {
+          internalSendEvent('progress', { 
+            global: true, 
+            step: `Fetching tracker info (${processedCount}/${allTorrents.length})...`, 
+            progress: 18 + Math.floor((processedCount / allTorrents.length) * 5)
+          });
+        }
       }
     }));
     
-    // Periodically yield to the event loop so other requests (like heartbeat/status) can be processed
-    if (i % 100 === 0) {
-      await new Promise(resolve => setImmediate(resolve));
-      internalSendEvent('progress', { 
-        global: true, 
-        step: `Fetching tracker info (${i}/${allTorrents.length})...`, 
-        progress: 18 + Math.floor((i / allTorrents.length) * 5) // spread over 18-23% range
-      });
-    }
+    // Yield to event loop after each batch
+    await new Promise(resolve => setImmediate(resolve));
   }
   console.log('Finished fetching tracker info.');
 
