@@ -132,6 +132,7 @@ async function walkDirForVideos(dirPath, torrent, inodeIndex) {
  */
 async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
   console.log(`Building inode index for ${torrents.length} torrents...`);
+  const startTime = Date.now();
   const inodeIndex = new Map();
   if (sendEvent) sendEvent('progress', { global: true, step: `Building hardlink inode index for ${torrents.length} torrents...`, progress: 20 });
 
@@ -160,7 +161,22 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
     // Update UI and yield
     const currentCount = Math.min(i + BATCH_SIZE, torrents.length);
     const pct = Math.min(40, 20 + Math.floor((currentCount / torrents.length) * 20));
-    if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${currentCount}/${torrents.length})...`, progress: pct });
+    // Calculate ETA
+    const elapsed = Date.now() - startTime;
+    const avgTimePerItem = elapsed / currentCount;
+    const remainingItems = torrents.length - currentCount;
+    const etaSeconds = Math.round((remainingItems * avgTimePerItem) / 1000);
+    const etaFormatted = etaSeconds > 60 
+      ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s` 
+      : `${etaSeconds}s`;
+
+    if (sendEvent) {
+      sendEvent('progress', { 
+        global: true, 
+        step: `Indexing Hardlinks (${currentCount}/${torrents.length}) - noch ca. ${etaFormatted}...`, 
+        progress: pct 
+      });
+    }
     
     if (currentScanState.cancelRequested) return inodeIndex;
     await new Promise(resolve => setImmediate(resolve));
@@ -241,6 +257,7 @@ async function walkDirForHashes(dirPath, torrent, hashIndex) {
 
 async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
   console.log(`Building fast hash index for ${torrents.length} torrents...`);
+  const startTime = Date.now();
   const hashIndex = new Map();
   if (sendEvent) sendEvent('progress', { global: true, step: `Building partial hash index for ${torrents.length} torrents...`, progress: 20 });
 
@@ -264,7 +281,22 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
     // Update UI and yield
     const currentCount = Math.min(i + BATCH_SIZE, torrents.length);
     const pct = Math.min(40, 20 + Math.floor((currentCount / torrents.length) * 20));
-    if (sendEvent) sendEvent('progress', { global: true, step: `Calculating Hashes (${currentCount}/${torrents.length})...`, progress: pct });
+    // Calculate ETA
+    const elapsed = Date.now() - startTime;
+    const avgTimePerItem = elapsed / currentCount;
+    const remainingItems = torrents.length - currentCount;
+    const etaSeconds = Math.round((remainingItems * avgTimePerItem) / 1000);
+    const etaFormatted = etaSeconds > 60 
+      ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s` 
+      : `${etaSeconds}s`;
+
+    if (sendEvent) {
+      sendEvent('progress', { 
+        global: true, 
+        step: `Calculating Hashes (${currentCount}/${torrents.length}) - noch ca. ${etaFormatted}...`, 
+        progress: pct 
+      });
+    }
     
     if (currentScanState.cancelRequested) return hashIndex;
     await new Promise(resolve => setImmediate(resolve));
