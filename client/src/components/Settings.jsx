@@ -4,34 +4,34 @@ import axios from 'axios';
 
 const MATCH_MODES = [
   {
-    value: 'hybrid',
-    label: '🕒 Hybrid: History + Name (Recommended)',
-    description: 'Fetches the most recent "grabbed" event from Radarr/Sonarr history to get the exact scene/release name, then matches it against the qBittorrent torrent name. Falls back to sanitized name matching if no history found. Most reliable for NZB + Torrent mixed setups.',
-  },
-  {
     value: 'hardlink',
-    label: '🔗 Hardlink: Inode Match (Most Accurate)',
-    description: 'Detects hardlinks between your media files and torrent files using inode comparison — only stat() calls, no file content is read. Requires the container to have read access to both media and torrent directories. Falls back to Hybrid (History + Name) if no hardlink is found.',
+    label: '🔗 Hardlink: Inode Match (Recommended & Most Accurate)',
+    description: 'Detects if files are identical via filesystem Inodes. 100% accurate, extremely fast, and zero file reading. Requires read-access to media/torrent folders. Falls back to Hybrid if no hardlink is found.',
   },
   {
     value: 'fast_hash',
     label: '⚡ Fast Checksum: Partial Hash',
-    description: 'Hashes only the first and last 1MB of the file. Extremely fast and reliable, even if files are NOT hardlinked. Requires the container to have read access to both media and torrent directories. Falls back to Hybrid (History + Name) if no hash match is found.',
+    description: 'Hashes the first and last 1MB of the file. Very fast and works even if files are NOT hardlinked. Requires read-access to media/torrent folders. Falls back to Hybrid if no hash match is found.',
+  },
+  {
+    value: 'hybrid',
+    label: '🕒 Hybrid: History + Name',
+    description: 'Uses Radarr/Sonarr history to find the exact release name, falling back to name-matching. Good for setups where direct file access is not possible or desired.',
   },
   {
     value: 'name_then_size',
     label: '🏷️ Name → Size Fallback',
-    description: 'Matches by sanitized release name first (fast). If no name match is found, falls back to exact video file size matching. Cross-seed duplicates with the same release name are correctly identified. Good default for pure torrent setups.',
+    description: 'Matches by sanitized name first, then by exact file size. A solid legacy method if metadata-based matching fails.',
   },
   {
     value: 'name_only',
     label: '🔤 Name Only',
-    description: 'Only matches by sanitized release name. No size fallback. Fast but may miss items if the torrent name differs from the release name in *Arr (e.g. renamed torrents or NZB downloads).',
+    description: 'Fastest metadata-only matching. Matches strictly by release name. May miss items if torrent names are heavily modified.',
   },
   {
     value: 'size_only',
     label: '📏 Size Only',
-    description: 'Matches solely by exact video file size (≥100 MB). Ignores names entirely. Useful when torrent names are unrelated to release names. Note: if two different releases share the same file size, the match is skipped to avoid false positives.',
+    description: 'Matches solely by exact video file size. Useful for obscure releases where names don\'t match at all, but risky if different releases have identical file sizes.',
   },
 ];
 

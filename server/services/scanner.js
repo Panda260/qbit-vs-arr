@@ -558,7 +558,7 @@ async function scanMedia(sendEvent) {
   const qbitUrl      = db.getSetting('qbit_url', '');
   const qbitUser     = db.getSetting('qbit_user', '');
   const qbitPass     = db.getSetting('qbit_password', '');
-  const matchMode    = db.getSetting('match_mode', 'hybrid'); // 'hybrid' | 'name_then_size' | 'name_only' | 'size_only' | 'hardlink' | 'fast_hash'
+  const matchMode    = db.getSetting('match_mode', 'hardlink'); // 'hardlink' | 'fast_hash' | 'hybrid' | 'name_then_size' | 'name_only' | 'size_only'
   const selectedTrackerHosts = db.getSetting('selected_tracker_hosts', []); // [] = no filter (all)
   const pathReplaceFrom = db.getSetting('path_replace_from', '');
   const pathReplaceTo   = db.getSetting('path_replace_to', '');
