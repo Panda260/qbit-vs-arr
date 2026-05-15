@@ -732,9 +732,13 @@ async function scanMedia(sendEvent) {
       for (let i = 0; i < movies.length; i++) {
         if (currentScanState.cancelRequested) break;
         const movie = movies[i];
-        const itemProgress = Math.floor(((i + 1) / movies.length) * 100);
-        instanceSendEvent(`[${i + 1}/${movies.length}] ${movie.title}`, Math.min(99, itemProgress));
-        await new Promise(resolve => setImmediate(resolve));
+        
+        // Update UI and yield every 10 items to reduce overhead
+        if ((i + 1) % 10 === 0 || (i + 1) === movies.length) {
+          const itemProgress = Math.floor(((i + 1) / movies.length) * 100);
+          instanceSendEvent(`[${i + 1}/${movies.length}] ${movie.title}`, Math.min(99, itemProgress));
+          await new Promise(resolve => setImmediate(resolve));
+        }
 
         const mf = movie.movieFile;
 
@@ -840,9 +844,13 @@ async function scanMedia(sendEvent) {
       for (let i = 0; i < series.length; i++) {
         if (currentScanState.cancelRequested) break;
         const show = series[i];
-        const itemProgress = Math.floor(((i + 1) / series.length) * 100);
-        instanceSendEvent(`[${i + 1}/${series.length}] ${show.title}`, Math.min(99, itemProgress));
-        await new Promise(resolve => setImmediate(resolve));
+
+        // Update UI and yield every 10 items to reduce overhead
+        if ((i + 1) % 10 === 0 || (i + 1) === series.length) {
+          const itemProgress = Math.floor(((i + 1) / series.length) * 100);
+          instanceSendEvent(`[${i + 1}/${series.length}] ${show.title}`, Math.min(99, itemProgress));
+          await new Promise(resolve => setImmediate(resolve));
+        }
 
         if (!show.seasons) continue;
 
