@@ -257,6 +257,7 @@ export default function Dashboard() {
   const matchBadge = (method) => {
     if (!method || method === 'none') return null;
     const styles = {
+      fast_hash: { bg: 'rgba(234,179,8,0.15)',  color: '#fde047', border: '1px solid rgba(234,179,8,0.3)',  label: '⚡ HASH'    },
       hardlink: { bg: 'rgba(6,182,212,0.15)',   color: '#67e8f9', border: '1px solid rgba(6,182,212,0.4)',   label: '🔗 HARDLINK'  },
       hash:    { bg: 'rgba(6,182,212,0.1)',    color: '#22d3ee', border: '1px solid rgba(6,182,212,0.3)',   label: '🔑 HASH'    },
       history: { bg: 'rgba(168,85,247,0.15)', color: '#c084fc', border: '1px solid rgba(168,85,247,0.3)', label: '🕒 HISTORY' },

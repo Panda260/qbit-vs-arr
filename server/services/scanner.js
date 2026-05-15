@@ -1,6 +1,7 @@
 const axios = require('axios');
 const fs = require('fs');
 const nodePath = require('path');
+const crypto = require('crypto');
 const db = require('./db');
 
 // ---------------------------------------------------------------------------
@@ -176,6 +177,90 @@ function matchByInode(inodeIndex, filePath, pathFrom, pathTo) {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Partial Hash index builder
+// ---------------------------------------------------------------------------
+
+const HASH_SAMPLE_SIZE = 1 * 1024 * 1024; // 1MB
+
+function calculatePartialHash(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile() || stats.size < MKV_MIN_SIZE_BYTES) return null;
+
+    const fd = fs.openSync(filePath, 'r');
+    const head = Buffer.alloc(HASH_SAMPLE_SIZE);
+    fs.readSync(fd, head, 0, HASH_SAMPLE_SIZE, 0);
+
+    let tail = Buffer.alloc(0);
+    if (stats.size > HASH_SAMPLE_SIZE * 2) {
+      tail = Buffer.alloc(HASH_SAMPLE_SIZE);
+      fs.readSync(fd, tail, 0, HASH_SAMPLE_SIZE, stats.size - HASH_SAMPLE_SIZE);
+    }
+    fs.closeSync(fd);
+
+    const hash = crypto.createHash('md5')
+      .update(head)
+      .update(tail)
+      .digest('hex');
+    
+    return `${stats.size}:${hash}`;
+  } catch (err) {
+    return null;
+  }
+}
+
+/** Recursively walk a directory and index all video files by partial hash. */
+function walkDirForHashes(dirPath, torrent, hashIndex) {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = nodePath.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        walkDirForHashes(fullPath, torrent, hashIndex);
+      } else if (entry.isFile() && VIDEO_EXTENSIONS.test(entry.name)) {
+        const hashKey = calculatePartialHash(fullPath);
+        if (hashKey) {
+          if (!hashIndex.has(hashKey)) hashIndex.set(hashKey, torrent);
+        }
+      }
+    }
+  } catch { /* skip */ }
+}
+
+async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
+  const hashIndex = new Map();
+  if (sendEvent) sendEvent('progress', { global: true, step: `Building partial hash index for ${torrents.length} torrents...`, progress: 20 });
+
+  for (let i = 0; i < torrents.length; i++) {
+    const torrent = torrents[i];
+    const localPath = rewritePath(torrent.content_path, pathFrom, pathTo);
+    try {
+      const st = fs.statSync(localPath);
+      if (st.isFile()) {
+        const hashKey = calculatePartialHash(localPath);
+        if (hashKey && !hashIndex.has(hashKey)) hashIndex.set(hashKey, torrent);
+      } else if (st.isDirectory()) {
+        walkDirForHashes(localPath, torrent, hashIndex);
+      }
+    } catch { /* skip */ }
+
+    if ((i + 1) % 50 === 0 && sendEvent) {
+      const pct = Math.min(30, 20 + Math.floor(((i + 1) / torrents.length) * 10));
+      sendEvent('progress', { global: true, step: `Building hash index... (${i + 1}/${torrents.length})`, progress: pct });
+    }
+  }
+  console.log(`Partial hash index built: ${hashIndex.size} files indexed.`);
+  return hashIndex;
+}
+
+function matchByPartialHash(hashIndex, filePath, pathFrom, pathTo) {
+  if (!filePath || !hashIndex || hashIndex.size === 0) return null;
+  const localPath = rewritePath(filePath, pathFrom, pathTo);
+  const hashKey = calculatePartialHash(localPath);
+  return hashKey ? hashIndex.get(hashKey) || null : null;
 }
 
 async function buildSizeIndex(torrents, url, cookie, sendEvent) {
@@ -473,7 +558,7 @@ async function scanMedia(sendEvent) {
   const qbitUrl      = db.getSetting('qbit_url', '');
   const qbitUser     = db.getSetting('qbit_user', '');
   const qbitPass     = db.getSetting('qbit_password', '');
-  const matchMode    = db.getSetting('match_mode', 'hybrid'); // 'hybrid' | 'name_then_size' | 'name_only' | 'size_only' | 'hardlink'
+  const matchMode    = db.getSetting('match_mode', 'hybrid'); // 'hybrid' | 'name_then_size' | 'name_only' | 'size_only' | 'hardlink' | 'fast_hash'
   const selectedTrackerHosts = db.getSetting('selected_tracker_hosts', []); // [] = no filter (all)
   const pathReplaceFrom = db.getSetting('path_replace_from', '');
   const pathReplaceTo   = db.getSetting('path_replace_to', '');
@@ -530,9 +615,17 @@ async function scanMedia(sendEvent) {
     });
   }
 
+  // Build partial hash index when fast_hash mode is active
+  let hashIndex = null;
+  if (matchMode === 'fast_hash') {
+    hashIndex = await buildFastHashIndex(torrents, pathReplaceFrom, pathReplaceTo, (type, data) => {
+      internalSendEvent(type, { global: true, ...data });
+    });
+  }
+
   // Build size index when needed
   let sizeIndex = null;
-  if (matchMode !== 'name_only' && matchMode !== 'hybrid' && matchMode !== 'hardlink') {
+  if (matchMode !== 'name_only' && matchMode !== 'hybrid' && matchMode !== 'hardlink' && matchMode !== 'fast_hash') {
     sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, (type, data) => {
       internalSendEvent(type, { global: true, ...data });
     });
@@ -570,10 +663,10 @@ async function scanMedia(sendEvent) {
           ? fileAliases
           : [movie.title, movie.originalTitle, movie.folderName].filter(Boolean);
 
-        // ── HYBRID / HARDLINK MODE: fetch history ────────────────────────────
+        // ── HYBRID / HARDLINK / FAST_HASH MODE: fetch history ────────────────────────────
         let historySourceTitle = null;
         let historyTorrentHash = null;
-        if (matchMode === 'hybrid' || matchMode === 'hardlink') {
+        if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
           const hist = await getRadarrMovieHistory(instance, movie.id);
           historySourceTitle = hist.sourceTitle;
           historyTorrentHash = hist.torrentHash;
@@ -590,8 +683,17 @@ async function scanMedia(sendEvent) {
         let matchingTorrents = [];
         let matchMethod = 'none';
 
+        // Step -2: Partial Hash match — read first/last 1MB
+        if (matchMode === 'fast_hash' && hashIndex && mf) {
+          const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
+          if (arrFilePath) {
+            const hashMatch = matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+            if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; }
+          }
+        }
+
         // Step -1: Hardlink (inode) match — only stat() calls, no file reads
-        if (matchMode === 'hardlink' && inodeIndex && mf) {
+        if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && mf) {
           const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
           if (arrFilePath) {
             const inoMatch = matchByInode(inodeIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
@@ -599,9 +701,9 @@ async function scanMedia(sendEvent) {
           }
         }
 
-        // Step 0: Direct torrent hash match (hybrid/hardlink, qBit downloads)
+        // Step 0: Direct torrent hash match (hybrid/hardlink/fast_hash, qBit downloads)
         // downloadId from Radarr IS the qBit info-hash — zero file reads, 100% accurate.
-        if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink') && historyTorrentHash) {
+        if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historyTorrentHash) {
           const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
           if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
         }
@@ -609,7 +711,7 @@ async function scanMedia(sendEvent) {
         // Step 1: Name match (always try unless size_only or already matched)
         if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
           matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
-          if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink') && historySourceTitle ? 'history' : 'name';
+          if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
         }
 
         // Step 2: Size fallback
@@ -664,10 +766,10 @@ async function scanMedia(sendEvent) {
         let episodeFiles = [];
         try { episodeFiles = await getSonarrEpisodeFiles(instance, show.id); } catch {}
 
-        // HYBRID / HARDLINK: get latest grabbed sourceTitle + torrentHash for the series
+        // HYBRID / HARDLINK / FAST_HASH: get latest grabbed sourceTitle + torrentHash for the series
         let historySourceTitle = null;
         let historyTorrentHash = null;
-        if (matchMode === 'hybrid' || matchMode === 'hardlink') {
+        if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
           const hist = await getSonarrSeriesHistory(instance, show.id);
           historySourceTitle = hist.sourceTitle;
           historyTorrentHash = hist.torrentHash;
@@ -690,8 +792,18 @@ async function scanMedia(sendEvent) {
           let matchingTorrents = [];
           let matchMethod = 'none';
 
+          // Step -2: Partial Hash match on episode files
+          if (matchMode === 'fast_hash' && hashIndex && seasonFiles.length > 0) {
+            for (const ef of seasonFiles) {
+              if (ef.path) {
+                const hashMatch = matchByPartialHash(hashIndex, ef.path, pathReplaceFrom, pathReplaceTo);
+                if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; break; }
+              }
+            }
+          }
+
           // Step -1: Hardlink (inode) match on episode files
-          if (matchMode === 'hardlink' && inodeIndex && seasonFiles.length > 0) {
+          if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && seasonFiles.length > 0) {
             for (const ef of seasonFiles) {
               if (ef.path) {
                 const inoMatch = matchByInode(inodeIndex, ef.path, pathReplaceFrom, pathReplaceTo);
@@ -700,8 +812,8 @@ async function scanMedia(sendEvent) {
             }
           }
 
-          // Step 0: Direct hash match (hybrid/hardlink + qBit download)
-          if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink') && historyTorrentHash) {
+          // Step 0: Direct hash match (hybrid/hardlink/fast_hash + qBit download)
+          if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historyTorrentHash) {
             const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
             if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
           }
@@ -711,7 +823,7 @@ async function scanMedia(sendEvent) {
             matchingTorrents = torrents.filter(t =>
               matchSanitized(sanitizedAliases, t.sName) && isSeasonMatch(t.name, sNum)
             );
-            if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink') && historySourceTitle ? 'history' : 'name';
+            if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
           }
 
           if (matchingTorrents.length === 0 && seasonFiles.length > 0) {

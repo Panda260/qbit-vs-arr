@@ -14,6 +14,11 @@ const MATCH_MODES = [
     description: 'Detects hardlinks between your media files and torrent files using inode comparison — only stat() calls, no file content is read. Requires the container to have read access to both media and torrent directories. Falls back to Hybrid (History + Name) if no hardlink is found.',
   },
   {
+    value: 'fast_hash',
+    label: '⚡ Fast Checksum: Partial Hash',
+    description: 'Hashes only the first and last 1MB of the file. Extremely fast and reliable, even if files are NOT hardlinked. Requires the container to have read access to both media and torrent directories. Falls back to Hybrid (History + Name) if no hash match is found.',
+  },
+  {
     value: 'name_then_size',
     label: '🏷️ Name → Size Fallback',
     description: 'Matches by sanitized release name first (fast). If no name match is found, falls back to exact video file size matching. Cross-seed duplicates with the same release name are correctly identified. Good default for pure torrent setups.',
@@ -216,10 +221,10 @@ export default function Settings() {
               {currentMode.description}
             </div>
 
-            {/* Hardlink path mapping (only shown in hardlink mode) */}
-            {settings.match_mode === 'hardlink' && (
+            {/* Hardlink / Hash path mapping (only shown in these modes) */}
+            {(settings.match_mode === 'hardlink' || settings.match_mode === 'fast_hash') && (
               <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(6,182,212,0.05)', borderRadius: '8px', border: '1px solid rgba(6,182,212,0.2)' }}>
-                <p style={{ fontSize: '0.82rem', color: '#67e8f9', marginBottom: '0.75rem', fontWeight: 600 }}>🔗 Hardlink Path Mapping</p>
+                <p style={{ fontSize: '0.82rem', color: '#67e8f9', marginBottom: '0.75rem', fontWeight: 600 }}>🔗 Path Mapping (Hardlink/Hash)</p>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: '1.5' }}>
                   If qBit/Arr use different path prefixes than this container, set a prefix replacement below.
                   <br />Example: qBit uses <code>/downloads</code>, but here it's mounted at <code>/data/torrents</code>.
