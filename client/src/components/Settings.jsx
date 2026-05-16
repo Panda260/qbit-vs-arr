@@ -5,7 +5,7 @@ import axios from 'axios';
 const MATCH_MODES = [
   {
     value: 'hardlink',
-    label: '🔗 Hardlink: Inode Match (Ultraschnell & 100% genau)',
+    label: '🔗 Hardlink: Inode Match (Ultraschnell & 100% genau) (Recommendet!)',
     description: 'Der schnellste Modus. Erkennt identische Dateien sofort über die Dateisystem-ID (Inode). 100% genau, extrem schnell und verursacht keine Festplattenlast. Setzt Hardlinks voraus.',
   },
   {
@@ -58,13 +58,13 @@ export default function Settings() {
   const [instances, setInstances] = useState([]);
   const [newInstance, setNewInstance] = useState({ type: 'radarr', name: '', url_internal: '', url_external: '', api_key: '' });
 
-  const [saveStatus, setSaveStatus]           = useState(null);
-  const [qbitTestStatus, setQbitTestStatus]   = useState(null);
+  const [saveStatus, setSaveStatus] = useState(null);
+  const [qbitTestStatus, setQbitTestStatus] = useState(null);
   const [crossSeedTestStatus, setCrossSeedTestStatus] = useState(null);
-  const [arrTestStatus, setArrTestStatus]     = useState(null);
-  const [deleteConfirm, setDeleteConfirm]     = useState(null);
+  const [arrTestStatus, setArrTestStatus] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [editingInstance, setEditingInstance] = useState(null);
-  const [instanceTests, setInstanceTests]     = useState({});
+  const [instanceTests, setInstanceTests] = useState({});
 
   useEffect(() => { fetchData(); }, []);
 
@@ -157,9 +157,9 @@ export default function Settings() {
 
   const statusIcon = (status, IdleIcon) => (
     status === 'loading' ? <RefreshCw size={18} className="animate-spin" /> :
-    status === 'success' ? <CheckCircle size={18} /> :
-    status === 'error'   ? <XCircle size={18} /> :
-    <IdleIcon size={18} />
+      status === 'success' ? <CheckCircle size={18} /> :
+        status === 'error' ? <XCircle size={18} /> :
+          <IdleIcon size={18} />
   );
 
   return (
