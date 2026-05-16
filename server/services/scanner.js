@@ -611,8 +611,12 @@ async function scanMedia(sendEvent) {
 
   try {
     console.log('Scanner: scanMedia initiated.');
-  currentScanState.cancelRequested = false;
-  internalSendEvent('progress', { global: true, step: 'Initializing', progress: 0 });
+    currentScanState.cancelRequested = false;
+    // Clear old results from memory and DB at the start of a new scan
+    lastScanResults = { media: [], tags: [], trackerHosts: [], timestamp: null };
+    db.setSetting('last_results', JSON.stringify(lastScanResults));
+    
+    internalSendEvent('progress', { global: true, step: 'Initializing', progress: 0 });
 
     const qbitUrl      = db.getSetting('qbit_url', '');
     const qbitUser     = db.getSetting('qbit_user', '');
