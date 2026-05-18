@@ -14,7 +14,8 @@ async function getQbitAuthCookie(url, username, password) {
   params.append('username', username);
   params.append('password', password);
   const response = await axios.post(`${cleanUrl}/api/v2/auth/login`, params.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': cleanUrl }
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': cleanUrl },
+    timeout: 10000
   });
   if (response.data === 'Fails.') throw new Error('Invalid username or password');
   const cookie = response.headers['set-cookie'];
@@ -25,7 +26,8 @@ async function getQbitAuthCookie(url, username, password) {
 async function getQbitTorrents(url, cookie) {
   const cleanUrl = url.replace(/\/$/, '');
   const response = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
-    headers: { Cookie: cookie }
+    headers: { Cookie: cookie },
+    timeout: 15000
   });
   return response.data;
 }
@@ -35,7 +37,8 @@ async function getQbitTorrentFiles(url, cookie, hash) {
   try {
     const response = await axios.get(`${cleanUrl}/api/v2/torrents/files`, {
       headers: { Cookie: cookie },
-      params: { hash }
+      params: { hash },
+      timeout: 10000
     });
     return response.data || [];
   } catch {
@@ -52,7 +55,8 @@ async function getQbitTorrentTrackers(url, cookie, hash) {
   try {
     const response = await axios.get(`${cleanUrl}/api/v2/torrents/trackers`, {
       headers: { Cookie: cookie },
-      params: { hash }
+      params: { hash },
+      timeout: 10000
     });
     return (response.data || [])
       .map(t => t.url)
@@ -371,7 +375,8 @@ function matchBySize(sizeIndex, fileSizeBytes) {
 async function getRadarrMovies(instance) {
   try {
     const response = await axios.get(`${instance.url_internal}/api/v3/movie`, {
-      headers: { 'X-Api-Key': instance.api_key }
+      headers: { 'X-Api-Key': instance.api_key },
+      timeout: 15000
     });
     return response.data.filter(m => m.hasFile);
   } catch (error) {
@@ -383,7 +388,8 @@ async function getRadarrMovies(instance) {
 async function getSonarrSeries(instance) {
   try {
     const response = await axios.get(`${instance.url_internal}/api/v3/series`, {
-      headers: { 'X-Api-Key': instance.api_key }
+      headers: { 'X-Api-Key': instance.api_key },
+      timeout: 15000
     });
     return response.data.filter(s => s.statistics && s.statistics.episodeFileCount > 0);
   } catch (error) {
@@ -395,7 +401,8 @@ async function getSonarrSeries(instance) {
 async function getSonarrEpisodeFiles(instance, seriesId) {
   try {
     const response = await axios.get(`${instance.url_internal}/api/v3/episodefile?seriesId=${seriesId}`, {
-      headers: { 'X-Api-Key': instance.api_key }
+      headers: { 'X-Api-Key': instance.api_key },
+      timeout: 10000
     });
     return response.data || [];
   } catch {
@@ -414,7 +421,8 @@ async function getRadarrMovieHistory(instance, movieId) {
   try {
     const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
       headers: { 'X-Api-Key': instance.api_key },
-      params: { movieId, pageSize: 50, page: 1, sortKey: 'date', sortDirection: 'descending' }
+      params: { movieId, pageSize: 50, page: 1, sortKey: 'date', sortDirection: 'descending' },
+      timeout: 10000
     });
     const records = response.data?.records || [];
     for (const rec of records) {
@@ -442,7 +450,8 @@ async function getSonarrSeriesHistory(instance, seriesId) {
   try {
     const response = await axios.get(`${instance.url_internal}/api/v3/history/series`, {
       headers: { 'X-Api-Key': instance.api_key },
-      params: { seriesId }
+      params: { seriesId },
+      timeout: 10000
     });
     const records = (response.data || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     for (const rec of records) {
@@ -470,6 +479,116 @@ async function getSonarrSeriesHistory(instance, seriesId) {
   } catch {
     return { sourceTitle: null, torrentHash: null };
   }
+}
+
+/**
+ * Prefetch all Radarr history entries globally using pagination to ensure full library coverage.
+ * Returns a Map of movieId -> { sourceTitle, torrentHash }
+ */
+async function prefetchRadarrHistory(instance) {
+  const historyMap = new Map();
+  try {
+    let page = 1;
+    const pageSize = 2000;
+    let hasMore = true;
+    const maxPages = 15; // Fetch up to 30,000 history items to cover full library
+
+    while (hasMore && page <= maxPages) {
+      console.log(`Prefetching Radarr history for ${instance.name}: page ${page}...`);
+      const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
+        headers: { 'X-Api-Key': instance.api_key },
+        params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
+        timeout: 15000
+      });
+      const records = response.data?.records || [];
+      if (records.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const rec of records) {
+        if (!rec.movieId) continue;
+        if (historyMap.has(rec.movieId)) continue;
+
+        if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
+          const isQbit = rec.data?.downloadClient?.toLowerCase().includes('qbittorrent');
+          const torrentHash = isQbit && rec.downloadId?.match(/^[0-9a-f]{40}$/i)
+            ? rec.downloadId.toLowerCase()
+            : null;
+          historyMap.set(rec.movieId, { sourceTitle: rec.sourceTitle, torrentHash });
+        }
+      }
+
+      if (records.length < pageSize) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+    console.log(`Prefetched history for ${historyMap.size} Radarr movies.`);
+  } catch (error) {
+    console.error(`Failed to prefetch Radarr history (${instance.name}):`, error.message);
+  }
+  return historyMap;
+}
+
+/**
+ * Prefetch all Sonarr history entries globally using pagination to ensure full library coverage.
+ * Returns a Map of seriesId -> { sourceTitle, torrentHash }
+ */
+async function prefetchSonarrHistory(instance) {
+  const historyMap = new Map();
+  try {
+    let page = 1;
+    const pageSize = 2000;
+    let hasMore = true;
+    const maxPages = 15; // Fetch up to 30,000 history items to cover full library
+
+    while (hasMore && page <= maxPages) {
+      console.log(`Prefetching Sonarr history for ${instance.name}: page ${page}...`);
+      const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
+        headers: { 'X-Api-Key': instance.api_key },
+        params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
+        timeout: 15000
+      });
+      const records = response.data?.records || [];
+      if (records.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const rec of records) {
+        if (!rec.seriesId) continue;
+        if (historyMap.has(rec.seriesId)) continue;
+
+        if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
+          let title = rec.sourceTitle;
+          const isEpisode = /S\d{1,2}E\d{1,2}(?!-E)/i.test(title);
+          if (isEpisode) {
+            title = title.replace(/E\d{1,2}/i, '');
+          }
+
+          const isQbit = rec.data?.downloadClient?.toLowerCase().includes('qbittorrent');
+          const rawHash = rec.downloadId || rec.data?.torrentInfoHash || '';
+          const torrentHash = isQbit && rawHash.match(/^[0-9a-f]{40}$/i)
+            ? rawHash.toLowerCase()
+            : null;
+
+          historyMap.set(rec.seriesId, { sourceTitle: title, torrentHash });
+        }
+      }
+
+      if (records.length < pageSize) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+    console.log(`Prefetched history for ${historyMap.size} Sonarr series.`);
+  } catch (error) {
+    console.error(`Failed to prefetch Sonarr history (${instance.name}):`, error.message);
+  }
+  return historyMap;
 }
 
 // ---------------------------------------------------------------------------
@@ -723,219 +842,121 @@ async function scanMedia(sendEvent) {
   internalSendEvent('progress', { global: true, step: 'Scanning Arr instances...', progress: 50 });
   
   const instancePromises = instances.map(async (instance) => {
-    const instanceResults = [];
     const instanceSendEvent = (step, progress) => {
       internalSendEvent('progress', { instanceName: instance.name, step, progress });
     };
 
-    if (currentScanState.cancelRequested) return [];
+    try {
+      const instanceResults = [];
 
-    console.log(`Starting scan of instance: ${instance.name} (${instance.type})`);
+      if (currentScanState.cancelRequested) return [];
 
-    if (instance.type === 'radarr') {
-      const movies = await getRadarrMovies(instance);
+      console.log(`Starting scan of instance: ${instance.name} (${instance.type})`);
 
-      for (let i = 0; i < movies.length; i++) {
-        checkCancel();
-        const movie = movies[i];
-        
-        // Update UI and yield every 10 items to reduce overhead
-        if ((i + 1) % 10 === 0 || (i + 1) === movies.length) {
-          const itemProgress = Math.floor(((i + 1) / movies.length) * 100);
-          instanceSendEvent(`[${i + 1}/${movies.length}] ${movie.title}`, Math.min(99, itemProgress));
-          await new Promise(resolve => setImmediate(resolve));
-        }
-
-        const mf = movie.movieFile;
-
-        // ── Build aliases ────────────────────────────────────────────
-        // Priority: sceneName > relativePath > title/folder
-        const fileAliases = [mf?.sceneName, mf?.relativePath].filter(Boolean);
-        const baseAliases = fileAliases.length > 0
-          ? fileAliases
-          : [movie.title, movie.originalTitle, movie.folderName].filter(Boolean);
-
-        // ── HYBRID / HARDLINK / FAST_HASH MODE: fetch history ────────────────────────────
-        let historySourceTitle = null;
-        let historyTorrentHash = null;
+      if (instance.type === 'radarr') {
+        instanceSendEvent('Prefetching history...', 5);
+        let historyMap = new Map();
         if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
-          const hist = await getRadarrMovieHistory(instance, movie.id);
-          historySourceTitle = hist.sourceTitle;
-          historyTorrentHash = hist.torrentHash;
+          historyMap = await prefetchRadarrHistory(instance);
         }
 
-        // Combine all aliases (history name takes priority)
-        const allAliases = historySourceTitle
-          ? [historySourceTitle, ...baseAliases]
-          : baseAliases;
+        instanceSendEvent('Fetching movies...', 10);
+        const movies = await getRadarrMovies(instance);
 
-        const sanitizedAliases = getSanitizedVariations(allAliases);
-
-        // ── Matching ─────────────────────────────────────────────────
-        let matchingTorrents = [];
-        let matchMethod = 'none';
-
-        // Step -2: Partial Hash match — read first/last 1MB
-        if (matchMode === 'fast_hash' && hashIndex && mf) {
-          const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
-          if (arrFilePath) {
-            const hashMatch = matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
-            if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; }
+        for (let i = 0; i < movies.length; i++) {
+          checkCancel();
+          const movie = movies[i];
+          
+          // Update UI and yield every 10 items to reduce overhead
+          if ((i + 1) % 10 === 0 || (i + 1) === movies.length) {
+            const itemProgress = Math.floor(((i + 1) / movies.length) * 100);
+            instanceSendEvent(`[${i + 1}/${movies.length}] ${movie.title}`, Math.min(99, itemProgress));
+            await new Promise(resolve => setImmediate(resolve));
           }
-        }
 
-        // Step -1: Hardlink (inode) match — only stat() calls, no file reads
-        if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && mf) {
-          const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
-          if (arrFilePath) {
-            const inoMatch = matchByInode(inodeIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
-            if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; }
-          }
-        }
+          const mf = movie.movieFile;
 
-        // Step 0: Direct torrent hash match (hybrid/hardlink/fast_hash, qBit downloads)
-        // downloadId from Radarr IS the qBit info-hash — zero file reads, 100% accurate.
-        if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historyTorrentHash) {
-          const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
-          if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
-        }
+          // ── Build aliases ────────────────────────────────────────────
+          // Priority: sceneName > relativePath > title/folder
+          const fileAliases = [mf?.sceneName, mf?.relativePath].filter(Boolean);
+          const baseAliases = fileAliases.length > 0
+            ? fileAliases
+            : [movie.title, movie.originalTitle, movie.folderName].filter(Boolean);
 
-        // Step 1: Name match (always try unless size_only or already matched)
-        if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
-          matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
-          if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
-        }
-
-        // Step 2: Size fallback
-        if (matchingTorrents.length === 0 && mf?.size) {
-          if (matchMode === 'size_only' || matchMode === 'name_then_size') {
-            if (!sizeIndex) {
-              sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, () => {});
+          // ── HYBRID / HARDLINK / FAST_HASH MODE: fetch history ────────────────────────────
+          let historySourceTitle = null;
+          let historyTorrentHash = null;
+          if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
+            const hist = historyMap.get(movie.id);
+            if (hist) {
+              historySourceTitle = hist.sourceTitle;
+              historyTorrentHash = hist.torrentHash;
             }
-            const sizeTorrent = matchBySize(sizeIndex, mf.size);
-            if (sizeTorrent) { matchingTorrents = [sizeTorrent]; matchMethod = 'size'; }
           }
-        }
 
-        // ── Tags + Tracker hosts ──────────────────────────────────────
-        const mediaTags = new Set();
-        const mediaTrackerHosts = new Set();
-        matchingTorrents.forEach(t => {
-          if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim()));
-          if (t._trackerHosts) t._trackerHosts.forEach(h => mediaTrackerHosts.add(h));
-        });
+          // Combine all aliases (history name takes priority)
+          const allAliases = historySourceTitle
+            ? [historySourceTitle, ...baseAliases]
+            : baseAliases;
 
-        const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : movie.path;
-        const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
-
-        instanceResults.push({
-          id: `radarr-${instance.name}-${movie.id}`,
-          title: movie.title,
-          type: 'movie',
-          instanceName: instance.name,
-          arrUrl: `${instance.url_external}/movie/${movie.titleSlug}`,
-          path: actualPath,
-          releaseName,
-          fileName: mf ? mf.relativePath : '',
-          qbitTags: Array.from(mediaTags),
-          qbitTrackerHosts: Array.from(mediaTrackerHosts),
-          inQbit: matchingTorrents.length > 0,
-          matchMethod
-        });
-      }
-
-    } else if (instance.type === 'sonarr') {
-      const series = await getSonarrSeries(instance);
-
-      for (let i = 0; i < series.length; i++) {
-        checkCancel();
-        const show = series[i];
-
-        // Update UI and yield every 10 items to reduce overhead
-        if ((i + 1) % 10 === 0 || (i + 1) === series.length) {
-          const itemProgress = Math.floor(((i + 1) / series.length) * 100);
-          instanceSendEvent(`[${i + 1}/${series.length}] ${show.title}`, Math.min(99, itemProgress));
-          await new Promise(resolve => setImmediate(resolve));
-        }
-
-        if (!show.seasons) continue;
-
-        let episodeFiles = [];
-        try { episodeFiles = await getSonarrEpisodeFiles(instance, show.id); } catch {}
-
-        // HYBRID / HARDLINK / FAST_HASH: get latest grabbed sourceTitle + torrentHash for the series
-        let historySourceTitle = null;
-        let historyTorrentHash = null;
-        if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
-          const hist = await getSonarrSeriesHistory(instance, show.id);
-          historySourceTitle = hist.sourceTitle;
-          historyTorrentHash = hist.torrentHash;
-        }
-
-        for (const season of show.seasons) {
-          if (!season.statistics || season.statistics.episodeFileCount === 0) continue;
-          const sNum = season.seasonNumber;
-          const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
-          const seasonSceneNames = [...new Set(seasonFiles.map(f => f.sceneName).filter(Boolean))];
-          const seasonPaths     = [...new Set(seasonFiles.map(f => f.relativePath).filter(Boolean))];
-
-          const fileAliases = seasonSceneNames.length > 0 || seasonPaths.length > 0
-            ? [...seasonSceneNames, ...seasonPaths]
-            : [show.title, show.originalTitle, show.path.split(/[/\\]/).pop()].filter(Boolean);
-
-          const allAliases = historySourceTitle ? [historySourceTitle, ...fileAliases] : fileAliases;
           const sanitizedAliases = getSanitizedVariations(allAliases);
 
+          // ── Matching ─────────────────────────────────────────────────
           let matchingTorrents = [];
           let matchMethod = 'none';
 
-          // Step -2: Partial Hash match on episode files
-          if (matchMode === 'fast_hash' && hashIndex && seasonFiles.length > 0) {
-            for (const ef of seasonFiles) {
-              if (ef.path) {
-                const hashMatch = matchByPartialHash(hashIndex, ef.path, pathReplaceFrom, pathReplaceTo);
-                if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; break; }
-              }
+          // Step -2: Partial Hash match — read first/last 1MB
+          if (matchMode === 'fast_hash' && hashIndex && mf) {
+            const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
+            if (arrFilePath) {
+              const hashMatch = matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+              if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; }
             }
           }
 
-          // Step -1: Hardlink (inode) match on episode files
-          if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && seasonFiles.length > 0) {
-            for (const ef of seasonFiles) {
-              if (ef.path) {
-                const inoMatch = matchByInode(inodeIndex, ef.path, pathReplaceFrom, pathReplaceTo);
-                if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; break; }
-              }
+          // Step -1: Hardlink (inode) match — only stat() calls, no file reads
+          if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && mf) {
+            const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
+            if (arrFilePath) {
+              const inoMatch = matchByInode(inodeIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+              if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; }
             }
           }
 
-          // Step 0: Direct hash match (hybrid/hardlink/fast_hash + qBit download)
+          // Step 0: Direct torrent hash match (hybrid/hardlink/fast_hash, qBit downloads)
+          // downloadId from Radarr IS the qBit info-hash — zero file reads, 100% accurate.
           if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historyTorrentHash) {
             const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
             if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
           }
 
-          // Step 1: Name + season match
+          // Step 1: Name match (always try unless size_only or already matched)
           if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
-            matchingTorrents = torrents.filter(t =>
-              matchSanitized(sanitizedAliases, t.sName) && isSeasonMatch(t.name, sNum)
-            );
-            if (matchingTorrents.length > 0) matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
-          }
+            const allowedAliases = matchMode === 'hardlink'
+              ? (historySourceTitle ? [historySourceTitle] : [])
+              : sanitizedAliases;
 
-          if (matchingTorrents.length === 0 && seasonFiles.length > 0) {
-            if (matchMode === 'size_only' || matchMode === 'name_then_size') {
-              if (!sizeIndex) {
-                console.log('Dynamic size index build started for Sonarr...');
-                sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, internalSendEvent);
-              }
-              for (const ef of seasonFiles) {
-                const sizeTorrent = matchBySize(sizeIndex, ef.size);
-                if (sizeTorrent) { matchingTorrents = [sizeTorrent]; matchMethod = 'size'; break; }
+            if (allowedAliases.length > 0) {
+              const sAliases = matchMode === 'hardlink' ? getSanitizedVariations(allowedAliases) : sanitizedAliases;
+              matchingTorrents = torrents.filter(t => matchSanitized(sAliases, t.sName));
+              if (matchingTorrents.length > 0) {
+                matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
               }
             }
           }
 
+          // Step 2: Size fallback
+          if (matchingTorrents.length === 0 && mf?.size) {
+            if (matchMode === 'size_only' || matchMode === 'name_then_size') {
+              if (!sizeIndex) {
+                sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, () => {});
+              }
+              const sizeTorrent = matchBySize(sizeIndex, mf.size);
+              if (sizeTorrent) { matchingTorrents = [sizeTorrent]; matchMethod = 'size'; }
+            }
+          }
+
+          // ── Tags + Tracker hosts ──────────────────────────────────────
           const mediaTags = new Set();
           const mediaTrackerHosts = new Set();
           matchingTorrents.forEach(t => {
@@ -943,30 +964,171 @@ async function scanMedia(sendEvent) {
             if (t._trackerHosts) t._trackerHosts.forEach(h => mediaTrackerHosts.add(h));
           });
 
-          const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
-          const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
-          const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
+          const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : movie.path;
+          const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
 
           instanceResults.push({
-            id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
-            title: `${show.title} - Season ${sNum}`,
-            type: 'series',
+            id: `radarr-${instance.name}-${movie.id}`,
+            title: movie.title,
+            type: 'movie',
             instanceName: instance.name,
-            arrUrl: `${instance.url_external}/series/${show.titleSlug}`,
+            arrUrl: `${instance.url_external}/movie/${movie.titleSlug}`,
             path: actualPath,
-            releaseName: `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
-            fileName: seasonFileNames,
+            releaseName,
+            fileName: mf ? mf.relativePath : '',
             qbitTags: Array.from(mediaTags),
             qbitTrackerHosts: Array.from(mediaTrackerHosts),
             inQbit: matchingTorrents.length > 0,
             matchMethod
           });
         }
+
+      } else if (instance.type === 'sonarr') {
+        instanceSendEvent('Prefetching history...', 5);
+        let historyMap = new Map();
+        if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
+          historyMap = await prefetchSonarrHistory(instance);
+        }
+
+        instanceSendEvent('Fetching series...', 10);
+        const series = await getSonarrSeries(instance);
+
+        for (let i = 0; i < series.length; i++) {
+          checkCancel();
+          const show = series[i];
+
+          // Update UI and yield every 10 items to reduce overhead
+          if ((i + 1) % 10 === 0 || (i + 1) === series.length) {
+            const itemProgress = Math.floor(((i + 1) / series.length) * 100);
+            instanceSendEvent(`[${i + 1}/${series.length}] ${show.title}`, Math.min(99, itemProgress));
+            await new Promise(resolve => setImmediate(resolve));
+          }
+
+          if (!show.seasons) continue;
+
+          let episodeFiles = [];
+          try { episodeFiles = await getSonarrEpisodeFiles(instance, show.id); } catch {}
+
+          // HYBRID / HARDLINK / FAST_HASH: get latest grabbed sourceTitle + torrentHash for the series
+          let historySourceTitle = null;
+          let historyTorrentHash = null;
+          if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
+            const hist = historyMap.get(show.id);
+            if (hist) {
+              historySourceTitle = hist.sourceTitle;
+              historyTorrentHash = hist.torrentHash;
+            }
+          }
+
+          for (const season of show.seasons) {
+            if (!season.statistics || season.statistics.episodeFileCount === 0) continue;
+            const sNum = season.seasonNumber;
+            const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
+            const seasonSceneNames = [...new Set(seasonFiles.map(f => f.sceneName).filter(Boolean))];
+            const seasonPaths     = [...new Set(seasonFiles.map(f => f.relativePath).filter(Boolean))];
+
+            const fileAliases = seasonSceneNames.length > 0 || seasonPaths.length > 0
+              ? [...seasonSceneNames, ...seasonPaths]
+              : [show.title, show.originalTitle, show.path.split(/[/\\]/).pop()].filter(Boolean);
+
+            const allAliases = historySourceTitle ? [historySourceTitle, ...fileAliases] : fileAliases;
+            const sanitizedAliases = getSanitizedVariations(allAliases);
+
+            let matchingTorrents = [];
+            let matchMethod = 'none';
+
+            // Step -2: Partial Hash match on episode files
+            if (matchMode === 'fast_hash' && hashIndex && seasonFiles.length > 0) {
+              for (const ef of seasonFiles) {
+                if (ef.path) {
+                  const hashMatch = matchByPartialHash(hashIndex, ef.path, pathReplaceFrom, pathReplaceTo);
+                  if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; break; }
+                }
+              }
+            }
+
+            // Step -1: Hardlink (inode) match on episode files
+            if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && seasonFiles.length > 0) {
+              for (const ef of seasonFiles) {
+                if (ef.path) {
+                  const inoMatch = matchByInode(inodeIndex, ef.path, pathReplaceFrom, pathReplaceTo);
+                  if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; break; }
+                }
+              }
+            }
+
+            // Step 0: Direct hash match (hybrid/hardlink/fast_hash + qBit download)
+            if (matchingTorrents.length === 0 && (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historyTorrentHash) {
+              const hashMatch = torrents.find(t => t.hash?.toLowerCase() === historyTorrentHash);
+              if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'hash'; }
+            }
+
+            // Step 1: Name + season match
+            if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
+              const allowedAliases = matchMode === 'hardlink'
+                ? (historySourceTitle ? [historySourceTitle] : [])
+                : sanitizedAliases;
+
+              if (allowedAliases.length > 0) {
+                const sAliases = matchMode === 'hardlink' ? getSanitizedVariations(allowedAliases) : sanitizedAliases;
+                matchingTorrents = torrents.filter(t =>
+                  matchSanitized(sAliases, t.sName) && isSeasonMatch(t.name, sNum)
+                );
+                if (matchingTorrents.length > 0) {
+                  matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
+                }
+              }
+            }
+
+            if (matchingTorrents.length === 0 && seasonFiles.length > 0) {
+              if (matchMode === 'size_only' || matchMode === 'name_then_size') {
+                if (!sizeIndex) {
+                  console.log('Dynamic size index build started for Sonarr...');
+                  sizeIndex = await buildSizeIndex(torrents, qbitUrl, cookie, internalSendEvent);
+                }
+                for (const ef of seasonFiles) {
+                  const sizeTorrent = matchBySize(sizeIndex, ef.size);
+                  if (sizeTorrent) { matchingTorrents = [sizeTorrent]; matchMethod = 'size'; break; }
+                }
+              }
+            }
+
+            const mediaTags = new Set();
+            const mediaTrackerHosts = new Set();
+            matchingTorrents.forEach(t => {
+              if (t.tags) t.tags.split(',').forEach(tag => mediaTags.add(tag.trim()));
+              if (t._trackerHosts) t._trackerHosts.forEach(h => mediaTrackerHosts.add(h));
+            });
+
+            const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
+            const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
+            const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
+
+            instanceResults.push({
+              id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
+              title: `${show.title} - Season ${sNum}`,
+              type: 'series',
+              instanceName: instance.name,
+              arrUrl: `${instance.url_external}/series/${show.titleSlug}`,
+              path: actualPath,
+              releaseName: `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
+              fileName: seasonFileNames,
+              qbitTags: Array.from(mediaTags),
+              qbitTrackerHosts: Array.from(mediaTrackerHosts),
+              inQbit: matchingTorrents.length > 0,
+              matchMethod
+            });
+          }
+        }
       }
+      
+      instanceSendEvent('Finished', 100);
+      return instanceResults;
+    } catch (err) {
+      console.error(`Failed to scan instance ${instance.name}:`, err);
+      instanceSendEvent(`Failed: ${err.message}`, 100);
+      return [];
     }
-    
-    instanceSendEvent('Finished', 100);
-    return instanceResults;
   });
 
   let finalMedia = [];
@@ -1023,7 +1185,8 @@ async function testArr(type, url, apiKey) {
   const endpoint = type === 'radarr' ? '/api/v3/movie' : '/api/v3/series';
   await axios.get(`${url}${endpoint}`, {
     headers: { 'X-Api-Key': apiKey },
-    params: { limit: 1 }
+    params: { limit: 1 },
+    timeout: 10000
   });
   return true;
 }
