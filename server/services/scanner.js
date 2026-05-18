@@ -305,11 +305,13 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
   return hashIndex;
 }
 
-function matchByPartialHash(hashIndex, filePath, pathFrom, pathTo) {
+async function matchByPartialHash(hashIndex, filePath, pathFrom, pathTo) {
   if (!filePath || !hashIndex || hashIndex.size === 0) return null;
   const localPath = rewritePath(filePath, pathFrom, pathTo);
-  const hashKey = calculatePartialHash(localPath);
-  return hashKey ? hashIndex.get(hashKey) || null : null;
+  // CRITICAL: calculatePartialHash is async — must be awaited or it returns an unresolved
+  // Promise object (always truthy), making hashIndex.get() always return undefined.
+  const hashKey = await calculatePartialHash(localPath);
+  return hashKey ? (hashIndex.get(hashKey) || null) : null;
 }
 
 async function buildSizeIndex(torrents, url, cookie, sendEvent) {
@@ -1005,11 +1007,11 @@ async function scanMedia(sendEvent) {
           let matchingTorrents = [];
           let matchMethod = 'none';
 
-          // Step -2: Partial Hash match — read first/last 1MB
+          // Step -2: Partial Hash match — read first/last 1MB of Arr file, compare against qBit index
           if (matchMode === 'fast_hash' && hashIndex && mf) {
             const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
             if (arrFilePath) {
-              const hashMatch = matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+              const hashMatch = await matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
               if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; }
             }
           }
@@ -1139,11 +1141,11 @@ async function scanMedia(sendEvent) {
             let matchingTorrents = [];
             let matchMethod = 'none';
 
-            // Step -2: Partial Hash match on episode files
+            // Step -2: Partial Hash match on episode files — read first/last 1MB of each Arr file
             if (matchMode === 'fast_hash' && hashIndex && seasonFiles.length > 0) {
               for (const ef of seasonFiles) {
                 if (ef.path) {
-                  const hashMatch = matchByPartialHash(hashIndex, ef.path, pathReplaceFrom, pathReplaceTo);
+                  const hashMatch = await matchByPartialHash(hashIndex, ef.path, pathReplaceFrom, pathReplaceTo);
                   if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; break; }
                 }
               }
