@@ -490,7 +490,7 @@ async function prefetchRadarrHistory(instance, sendEvent) {
   const historyMap = new Map();
   try {
     let page = 1;
-    const pageSize = 1000; // 1000 is highly stable and prevents database timeout issues
+    let pageSize = 1000;
     let hasMore = true;
     let totalRecords = 0;
     let totalPages = 1;
@@ -498,33 +498,47 @@ async function prefetchRadarrHistory(instance, sendEvent) {
     while (hasMore) {
       if (sendEvent) {
         const pct = Math.min(99, Math.floor((page / totalPages) * 100));
-        sendEvent(`[Verlauf] Lade Radarr-Seite ${page}/${totalPages} (${pct}%)`, pct);
+        sendEvent(`[Verlauf] Lade Radarr-Seite ${page}/${totalPages} (${pct}%) - Größe: ${pageSize}`, pct);
       }
-      console.log(`Prefetching Radarr history for ${instance.name}: page ${page}...`);
+      console.log(`Prefetching Radarr history for ${instance.name}: page ${page} (Größe: ${pageSize})...`);
 
       let records = [];
-      let attempt = 1;
-      const maxAttempts = 5;
       let success = false;
+      let attempt = 1;
+      const maxAttempts = 3;
 
-      while (attempt <= maxAttempts && !success) {
+      while (!success) {
         try {
           const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
             headers: { 'X-Api-Key': instance.api_key },
             params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
-            timeout: 25000 // Generous 25 seconds timeout to prevent failures
+            timeout: 25000 // 25 seconds timeout
           });
           records = response.data?.records || [];
           totalRecords = response.data?.totalRecords || 0;
           totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
           success = true;
         } catch (error) {
-          console.warn(`[Attempt ${attempt}/${maxAttempts}] Failed to fetch Radarr history page ${page} for ${instance.name}: ${error.message}`);
-          attempt++;
-          if (attempt <= maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s before retry
+          console.warn(`Failed to fetch Radarr history page ${page} (Größe ${pageSize}) for ${instance.name}: ${error.message}`);
+          
+          if (pageSize > 100) {
+            // Self-healing: Halve the page size to reduce database load and avoid timeouts
+            const oldPageSize = pageSize;
+            pageSize = Math.max(100, Math.floor(pageSize / 2));
+            const startIndex = (page - 1) * oldPageSize;
+            page = Math.floor(startIndex / pageSize) + 1;
+            console.log(`Self-healing: Reducing pageSize from ${oldPageSize} to ${pageSize}. New target page: ${page}`);
+            // Wait 1 second before retrying
+            await new Promise(resolve => setTimeout(resolve, 1000));
           } else {
-            throw new Error(`Failed to fetch Radarr history page ${page} after ${maxAttempts} attempts: ${error.message}`);
+            // Already at minimum page size (100) and still failing -> retry with backoff
+            if (attempt <= maxAttempts) {
+              console.log(`Retrying Radarr page ${page} (attempt ${attempt}/${maxAttempts})...`);
+              attempt++;
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            } else {
+              throw new Error(`Failed to fetch Radarr history page ${page} even at minimum page size: ${error.message}`);
+            }
           }
         }
       }
@@ -579,7 +593,7 @@ async function prefetchSonarrHistory(instance, sendEvent) {
   const historyMap = new Map();
   try {
     let page = 1;
-    const pageSize = 1000; // 1000 is highly stable and prevents database timeout issues
+    let pageSize = 1000;
     let hasMore = true;
     let totalRecords = 0;
     let totalPages = 1;
@@ -587,33 +601,47 @@ async function prefetchSonarrHistory(instance, sendEvent) {
     while (hasMore) {
       if (sendEvent) {
         const pct = Math.min(99, Math.floor((page / totalPages) * 100));
-        sendEvent(`[Verlauf] Lade Sonarr-Seite ${page}/${totalPages} (${pct}%)`, pct);
+        sendEvent(`[Verlauf] Lade Sonarr-Seite ${page}/${totalPages} (${pct}%) - Größe: ${pageSize}`, pct);
       }
-      console.log(`Prefetching Sonarr history for ${instance.name}: page ${page}...`);
+      console.log(`Prefetching Sonarr history for ${instance.name}: page ${page} (Größe: ${pageSize})...`);
 
       let records = [];
-      let attempt = 1;
-      const maxAttempts = 5;
       let success = false;
+      let attempt = 1;
+      const maxAttempts = 3;
 
-      while (attempt <= maxAttempts && !success) {
+      while (!success) {
         try {
           const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
             headers: { 'X-Api-Key': instance.api_key },
             params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
-            timeout: 25000 // Generous 25 seconds timeout to prevent failures
+            timeout: 25000 // 25 seconds timeout
           });
           records = response.data?.records || [];
           totalRecords = response.data?.totalRecords || 0;
           totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
           success = true;
         } catch (error) {
-          console.warn(`[Attempt ${attempt}/${maxAttempts}] Failed to fetch Sonarr history page ${page} for ${instance.name}: ${error.message}`);
-          attempt++;
-          if (attempt <= maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s before retry
+          console.warn(`Failed to fetch Sonarr history page ${page} (Größe ${pageSize}) for ${instance.name}: ${error.message}`);
+          
+          if (pageSize > 100) {
+            // Self-healing: Halve the page size to reduce database load and avoid timeouts
+            const oldPageSize = pageSize;
+            pageSize = Math.max(100, Math.floor(pageSize / 2));
+            const startIndex = (page - 1) * oldPageSize;
+            page = Math.floor(startIndex / pageSize) + 1;
+            console.log(`Self-healing: Reducing pageSize from ${oldPageSize} to ${pageSize}. New target page: ${page}`);
+            // Wait 1 second before retrying
+            await new Promise(resolve => setTimeout(resolve, 1000));
           } else {
-            throw new Error(`Failed to fetch Sonarr history page ${page} after ${maxAttempts} attempts: ${error.message}`);
+            // Already at minimum page size (100) and still failing -> retry with backoff
+            if (attempt <= maxAttempts) {
+              console.log(`Retrying Sonarr page ${page} (attempt ${attempt}/${maxAttempts})...`);
+              attempt++;
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            } else {
+              throw new Error(`Failed to fetch Sonarr history page ${page} even at minimum page size: ${error.message}`);
+            }
           }
         }
       }
