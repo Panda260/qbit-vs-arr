@@ -96,7 +96,7 @@ async function getAllTrackerUrls(url, cookie, torrents) {
 // Inode (hardlink) index builder
 // ---------------------------------------------------------------------------
 
-const MKV_MIN_SIZE_BYTES = 100 * 1024 * 1024;
+const MKV_MIN_SIZE_BYTES = 5 * 1024 * 1024; // 5MB instead of 100MB to index smaller episodes and anime
 const VIDEO_EXTENSIONS = /\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|webm|iso)$/i;
 
 /**
@@ -194,7 +194,8 @@ function matchByInode(inodeIndex, filePath, pathFrom, pathTo) {
   const localPath = rewritePath(filePath, pathFrom, pathTo);
   try {
     const st = fs.statSync(localPath);
-    if (st.nlink <= 1) return null; // file has no hardlinks elsewhere
+    // Remove the nlink <= 1 check because some filesystems (like MergerFS/FUSE or certain Docker configurations)
+    // might report st.nlink as 1 even when the file is hardlinked. Map lookup is O(1) and safe regardless.
     const key = `${st.dev}:${st.ino}`;
     return inodeIndex.get(key) || null;
   } catch {
@@ -508,14 +509,25 @@ async function prefetchRadarrHistory(instance) {
 
       for (const rec of records) {
         if (!rec.movieId) continue;
-        if (historyMap.has(rec.movieId)) continue;
 
         if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
           const isQbit = rec.data?.downloadClient?.toLowerCase().includes('qbittorrent');
           const torrentHash = isQbit && rec.downloadId?.match(/^[0-9a-f]{40}$/i)
             ? rec.downloadId.toLowerCase()
             : null;
-          historyMap.set(rec.movieId, { sourceTitle: rec.sourceTitle, torrentHash });
+          
+          if (!historyMap.has(rec.movieId)) {
+            historyMap.set(rec.movieId, { sourceTitle: rec.sourceTitle, torrentHash });
+          } else {
+            // Merge: if the existing record is missing torrentHash, and this one has it, fill it in!
+            const existing = historyMap.get(rec.movieId);
+            if (!existing.torrentHash && torrentHash) {
+              existing.torrentHash = torrentHash;
+            }
+            if (!existing.sourceTitle && rec.sourceTitle) {
+              existing.sourceTitle = rec.sourceTitle;
+            }
+          }
         }
       }
 
@@ -576,7 +588,11 @@ async function prefetchSonarrHistory(instance) {
           if (!historyMap.has(rec.seriesId)) {
             historyMap.set(rec.seriesId, []);
           }
-          historyMap.get(rec.seriesId).push({ sourceTitle: title, torrentHash });
+          const existingArray = historyMap.get(rec.seriesId);
+          const isDuplicate = existingArray.some(item => item.sourceTitle === title && item.torrentHash === torrentHash);
+          if (!isDuplicate) {
+            existingArray.push({ sourceTitle: title, torrentHash });
+          }
         }
       }
 
