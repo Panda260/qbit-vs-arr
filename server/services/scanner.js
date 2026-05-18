@@ -559,7 +559,6 @@ async function prefetchSonarrHistory(instance) {
 
       for (const rec of records) {
         if (!rec.seriesId) continue;
-        if (historyMap.has(rec.seriesId)) continue;
 
         if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
           let title = rec.sourceTitle;
@@ -574,7 +573,10 @@ async function prefetchSonarrHistory(instance) {
             ? rawHash.toLowerCase()
             : null;
 
-          historyMap.set(rec.seriesId, { sourceTitle: title, torrentHash });
+          if (!historyMap.has(rec.seriesId)) {
+            historyMap.set(rec.seriesId, []);
+          }
+          historyMap.get(rec.seriesId).push({ sourceTitle: title, torrentHash });
         }
       }
 
@@ -932,16 +934,9 @@ async function scanMedia(sendEvent) {
 
           // Step 1: Name match (always try unless size_only or already matched)
           if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
-            const allowedAliases = matchMode === 'hardlink'
-              ? (historySourceTitle ? [historySourceTitle] : [])
-              : sanitizedAliases;
-
-            if (allowedAliases.length > 0) {
-              const sAliases = matchMode === 'hardlink' ? getSanitizedVariations(allowedAliases) : sanitizedAliases;
-              matchingTorrents = torrents.filter(t => matchSanitized(sAliases, t.sName));
-              if (matchingTorrents.length > 0) {
-                matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
-              }
+            matchingTorrents = torrents.filter(t => matchSanitized(sanitizedAliases, t.sName));
+            if (matchingTorrents.length > 0) {
+              matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
             }
           }
 
@@ -1009,15 +1004,10 @@ async function scanMedia(sendEvent) {
           let episodeFiles = [];
           try { episodeFiles = await getSonarrEpisodeFiles(instance, show.id); } catch {}
 
-          // HYBRID / HARDLINK / FAST_HASH: get latest grabbed sourceTitle + torrentHash for the series
-          let historySourceTitle = null;
-          let historyTorrentHash = null;
+          // HYBRID / HARDLINK / FAST_HASH: get all grabbed history records for the series
+          let seriesHistory = [];
           if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
-            const hist = historyMap.get(show.id);
-            if (hist) {
-              historySourceTitle = hist.sourceTitle;
-              historyTorrentHash = hist.torrentHash;
-            }
+            seriesHistory = historyMap.get(show.id) || [];
           }
 
           for (const season of show.seasons) {
@@ -1026,6 +1016,20 @@ async function scanMedia(sendEvent) {
             const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
             const seasonSceneNames = [...new Set(seasonFiles.map(f => f.sceneName).filter(Boolean))];
             const seasonPaths     = [...new Set(seasonFiles.map(f => f.relativePath).filter(Boolean))];
+
+            // HYBRID / HARDLINK / FAST_HASH: filter series history for this season's matching torrentHash/sourceTitle
+            let historySourceTitle = null;
+            let historyTorrentHash = null;
+            if ((matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && seriesHistory.length > 0) {
+              const seasonRecord = seriesHistory.find(hist => hist.torrentHash && isSeasonMatch(hist.sourceTitle, sNum));
+              if (seasonRecord) {
+                historyTorrentHash = seasonRecord.torrentHash;
+              }
+              const matchingTitles = seriesHistory.filter(hist => hist.sourceTitle && isSeasonMatch(hist.sourceTitle, sNum));
+              if (matchingTitles.length > 0) {
+                historySourceTitle = matchingTitles[0].sourceTitle;
+              }
+            }
 
             const fileAliases = seasonSceneNames.length > 0 || seasonPaths.length > 0
               ? [...seasonSceneNames, ...seasonPaths]
@@ -1065,18 +1069,11 @@ async function scanMedia(sendEvent) {
 
             // Step 1: Name + season match
             if (matchingTorrents.length === 0 && matchMode !== 'size_only') {
-              const allowedAliases = matchMode === 'hardlink'
-                ? (historySourceTitle ? [historySourceTitle] : [])
-                : sanitizedAliases;
-
-              if (allowedAliases.length > 0) {
-                const sAliases = matchMode === 'hardlink' ? getSanitizedVariations(allowedAliases) : sanitizedAliases;
-                matchingTorrents = torrents.filter(t =>
-                  matchSanitized(sAliases, t.sName) && isSeasonMatch(t.name, sNum)
-                );
-                if (matchingTorrents.length > 0) {
-                  matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
-                }
+              matchingTorrents = torrents.filter(t =>
+                matchSanitized(sanitizedAliases, t.sName) && isSeasonMatch(t.name, sNum)
+              );
+              if (matchingTorrents.length > 0) {
+                matchMethod = (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') && historySourceTitle ? 'history' : 'name';
               }
             }
 
