@@ -486,21 +486,49 @@ async function getSonarrSeriesHistory(instance, seriesId) {
  * Prefetch all Radarr history entries globally using pagination to ensure full library coverage.
  * Returns a Map of movieId -> { sourceTitle, torrentHash }
  */
-async function prefetchRadarrHistory(instance) {
+async function prefetchRadarrHistory(instance, sendEvent) {
   const historyMap = new Map();
   try {
     let page = 1;
-    const pageSize = 2000;
+    const pageSize = 1000; // 1000 is highly stable and prevents database timeout issues
     let hasMore = true;
+    let totalRecords = 0;
+    let totalPages = 1;
 
     while (hasMore) {
+      if (sendEvent) {
+        const pct = Math.min(99, Math.floor((page / totalPages) * 100));
+        sendEvent(`[Verlauf] Lade Radarr-Seite ${page}/${totalPages} (${pct}%)`, pct);
+      }
       console.log(`Prefetching Radarr history for ${instance.name}: page ${page}...`);
-      const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
-        headers: { 'X-Api-Key': instance.api_key },
-        params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
-        timeout: 15000
-      });
-      const records = response.data?.records || [];
+
+      let records = [];
+      let attempt = 1;
+      const maxAttempts = 5;
+      let success = false;
+
+      while (attempt <= maxAttempts && !success) {
+        try {
+          const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
+            headers: { 'X-Api-Key': instance.api_key },
+            params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
+            timeout: 25000 // Generous 25 seconds timeout to prevent failures
+          });
+          records = response.data?.records || [];
+          totalRecords = response.data?.totalRecords || 0;
+          totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+          success = true;
+        } catch (error) {
+          console.warn(`[Attempt ${attempt}/${maxAttempts}] Failed to fetch Radarr history page ${page} for ${instance.name}: ${error.message}`);
+          attempt++;
+          if (attempt <= maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s before retry
+          } else {
+            throw new Error(`Failed to fetch Radarr history page ${page} after ${maxAttempts} attempts: ${error.message}`);
+          }
+        }
+      }
+
       if (records.length === 0) {
         hasMore = false;
         break;
@@ -547,21 +575,49 @@ async function prefetchRadarrHistory(instance) {
  * Prefetch all Sonarr history entries globally using pagination to ensure full library coverage.
  * Returns a Map of seriesId -> { sourceTitle, torrentHash }
  */
-async function prefetchSonarrHistory(instance) {
+async function prefetchSonarrHistory(instance, sendEvent) {
   const historyMap = new Map();
   try {
     let page = 1;
-    const pageSize = 2000;
+    const pageSize = 1000; // 1000 is highly stable and prevents database timeout issues
     let hasMore = true;
+    let totalRecords = 0;
+    let totalPages = 1;
 
     while (hasMore) {
+      if (sendEvent) {
+        const pct = Math.min(99, Math.floor((page / totalPages) * 100));
+        sendEvent(`[Verlauf] Lade Sonarr-Seite ${page}/${totalPages} (${pct}%)`, pct);
+      }
       console.log(`Prefetching Sonarr history for ${instance.name}: page ${page}...`);
-      const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
-        headers: { 'X-Api-Key': instance.api_key },
-        params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
-        timeout: 15000
-      });
-      const records = response.data?.records || [];
+
+      let records = [];
+      let attempt = 1;
+      const maxAttempts = 5;
+      let success = false;
+
+      while (attempt <= maxAttempts && !success) {
+        try {
+          const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
+            headers: { 'X-Api-Key': instance.api_key },
+            params: { pageSize, page, sortKey: 'date', sortDirection: 'descending' },
+            timeout: 25000 // Generous 25 seconds timeout to prevent failures
+          });
+          records = response.data?.records || [];
+          totalRecords = response.data?.totalRecords || 0;
+          totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+          success = true;
+        } catch (error) {
+          console.warn(`[Attempt ${attempt}/${maxAttempts}] Failed to fetch Sonarr history page ${page} for ${instance.name}: ${error.message}`);
+          attempt++;
+          if (attempt <= maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2s before retry
+          } else {
+            throw new Error(`Failed to fetch Sonarr history page ${page} after ${maxAttempts} attempts: ${error.message}`);
+          }
+        }
+      }
+
       if (records.length === 0) {
         hasMore = false;
         break;
@@ -873,7 +929,7 @@ async function scanMedia(sendEvent) {
         instanceSendEvent('Prefetching history...', 5);
         let historyMap = new Map();
         if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
-          historyMap = await prefetchRadarrHistory(instance);
+          historyMap = await prefetchRadarrHistory(instance, instanceSendEvent);
         }
 
         instanceSendEvent('Fetching movies...', 10);
@@ -996,7 +1052,7 @@ async function scanMedia(sendEvent) {
         instanceSendEvent('Prefetching history...', 5);
         let historyMap = new Map();
         if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
-          historyMap = await prefetchSonarrHistory(instance);
+          historyMap = await prefetchSonarrHistory(instance, instanceSendEvent);
         }
 
         instanceSendEvent('Fetching series...', 10);
