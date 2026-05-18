@@ -492,9 +492,8 @@ async function prefetchRadarrHistory(instance) {
     let page = 1;
     const pageSize = 2000;
     let hasMore = true;
-    const maxPages = 15; // Fetch up to 30,000 history items to cover full library
 
-    while (hasMore && page <= maxPages) {
+    while (hasMore) {
       console.log(`Prefetching Radarr history for ${instance.name}: page ${page}...`);
       const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
         headers: { 'X-Api-Key': instance.api_key },
@@ -554,9 +553,8 @@ async function prefetchSonarrHistory(instance) {
     let page = 1;
     const pageSize = 2000;
     let hasMore = true;
-    const maxPages = 15; // Fetch up to 30,000 history items to cover full library
 
-    while (hasMore && page <= maxPages) {
+    while (hasMore) {
       console.log(`Prefetching Sonarr history for ${instance.name}: page ${page}...`);
       const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
         headers: { 'X-Api-Key': instance.api_key },
