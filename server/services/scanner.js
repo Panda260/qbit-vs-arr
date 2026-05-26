@@ -1061,6 +1061,7 @@ async function scanMedia(sendEvent) {
 
           const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : movie.path;
           const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
+          const sizeBytes = mf ? mf.size : (movie.sizeOnDisk || 0);
 
           instanceResults.push({
             id: `radarr-${instance.name}-${movie.id}`,
@@ -1071,6 +1072,7 @@ async function scanMedia(sendEvent) {
             path: actualPath,
             releaseName,
             fileName: mf ? mf.relativePath : '',
+            sizeBytes,
             qbitTags: Array.from(mediaTags),
             qbitTrackerHosts: Array.from(mediaTrackerHosts),
             inQbit: matchingTorrents.length > 0,
@@ -1201,6 +1203,14 @@ async function scanMedia(sendEvent) {
             const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
             const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
 
+            let sizeBytes = 0;
+            seasonFiles.forEach(f => {
+              if (f.size) sizeBytes += f.size;
+            });
+            if (sizeBytes === 0 && season.statistics && season.statistics.sizeOnDisk) {
+              sizeBytes = season.statistics.sizeOnDisk;
+            }
+
             instanceResults.push({
               id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
               title: `${show.title} - Season ${sNum}`,
@@ -1210,6 +1220,7 @@ async function scanMedia(sendEvent) {
               path: actualPath,
               releaseName: `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
               fileName: seasonFileNames,
+              sizeBytes,
               qbitTags: Array.from(mediaTags),
               qbitTrackerHosts: Array.from(mediaTrackerHosts),
               inQbit: matchingTorrents.length > 0,
