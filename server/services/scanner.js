@@ -934,7 +934,7 @@ async function scanMedia(sendEvent) {
         });
 
         const actualPath = movie.path;
-        const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
+        const releaseName = matchingTorrents.length > 0 ? matchingTorrents[0].name : (mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title);
 
         instanceResults.push({
           id: `radarr-${instance.name}-${movie.id}`,
@@ -1117,7 +1117,7 @@ async function scanMedia(sendEvent) {
             instanceName: instance.name,
             arrUrl: `${instance.url_external}/series/${show.titleSlug}`,
             path: actualPath,
-            releaseName: `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
+            releaseName: matchingTorrents.length > 0 ? matchingTorrents[0].name : `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
             fileName: seasonFileNames,
             qbitTags: Array.from(mediaTags),
             qbitTrackerHosts: Array.from(mediaTrackerHosts),
