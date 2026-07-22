@@ -1003,7 +1003,8 @@ async function scanMedia(sendEvent) {
           inQbit: matchingTorrents.length > 0,
           matchMethod,
           isGerman,
-          arrLanguage
+          arrLanguage,
+          matchedTorrents: matchingTorrents.map(t => ({ hash: t.hash, name: t.name, content_path: t.content_path, tags: t.tags, category: t.category }))
         });
       }
 
@@ -1184,7 +1185,8 @@ async function scanMedia(sendEvent) {
             inQbit: matchingTorrents.length > 0,
             matchMethod,
             isGerman,
-            arrLanguage
+            arrLanguage,
+            matchedTorrents: matchingTorrents.map(t => ({ hash: t.hash, name: t.name, content_path: t.content_path, tags: t.tags, category: t.category }))
           });
         }
       }

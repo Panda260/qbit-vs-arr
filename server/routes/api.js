@@ -282,8 +282,10 @@ router.get('/debug/item', async (req, res) => {
     const qbitUser = db.getSetting('qbit_user');
     const qbitPass = db.getSetting('qbit_pass');
     
+    const cleanUrl = (qbitUrl || '').replace(/\/$/, '');
+    
     // Attempt to log into qBit to get live tracker data
-    const qbAuth = await axios.post(`${qbitUrl}/api/v2/auth/login`, 
+    const qbAuth = await axios.post(`${cleanUrl}/api/v2/auth/login`, 
       new URLSearchParams({ username: qbitUser, password: qbitPass }).toString(),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     ).catch(() => null);
@@ -296,7 +298,7 @@ router.get('/debug/item', async (req, res) => {
     let allTorrents = [];
     if (cookie) {
       try {
-        const resTorrents = await axios.get(`${qbitUrl}/api/v2/torrents/info`, {
+        const resTorrents = await axios.get(`${cleanUrl}/api/v2/torrents/info`, {
           headers: { Cookie: cookie },
           params: { filter: 'all' }
         });
@@ -312,12 +314,18 @@ router.get('/debug/item', async (req, res) => {
         qbitCandidates: []
       };
       
-      if (allTorrents.length > 0) {
+      if (allTorrents.length > 0 || (item.matchedTorrents && item.matchedTorrents.length > 0)) {
         const titleLower = item.title.toLowerCase();
         const releaseLower = (item.releaseName || '').toLowerCase();
         
-        // Find torrents that share the title or release name
-        const candidates = allTorrents.filter(t => {
+        // Exact matches from scanner
+        const exactMatches = item.matchedTorrents || [];
+        
+        // Fuzzy matches from current qBittorrent state
+        const fuzzyMatches = allTorrents.filter(t => {
+          // Skip if already in exact matches
+          if (exactMatches.some(e => e.hash === t.hash)) return false;
+          
           const tName = t.name.toLowerCase();
           const tPath = (t.content_path || '').toLowerCase();
           return tName === releaseLower || 
@@ -326,16 +334,20 @@ router.get('/debug/item', async (req, res) => {
                  tPath.includes(titleLower);
         });
         
+        const candidates = [...exactMatches, ...fuzzyMatches];
+        
         for (const t of candidates) {
           // Fetch trackers for this candidate
           let trackers = [];
-          try {
-             const tr = await axios.get(`${qbitUrl}/api/v2/torrents/trackers`, {
-               headers: { Cookie: cookie },
-               params: { hash: t.hash }
-             });
-             trackers = (tr.data || []).map(x => x.url);
-          } catch(e) { trackers = ["error fetching trackers: " + e.message]; }
+          if (cookie) {
+            try {
+               const tr = await axios.get(`${cleanUrl}/api/v2/torrents/trackers`, {
+                 headers: { Cookie: cookie },
+                 params: { hash: t.hash }
+               });
+               trackers = (tr.data || []).map(x => x.url);
+            } catch(e) { trackers = ["error fetching trackers: " + e.message]; }
+          }
           
           info.qbitCandidates.push({
             hash: t.hash,
