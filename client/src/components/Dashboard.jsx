@@ -19,6 +19,7 @@ export default function Dashboard() {
 
   const [displayMode, setDisplayMode]     = useState('missing');
   const [showAllTags, setShowAllTags]     = useState(true);
+  const [bypassIgnore, setBypassIgnore]   = useState(false);
   const [copiedId, setCopiedId]           = useState(null);
   const [settings, setSettings]           = useState({ ignored_keywords: [] });
   const [instances, setInstances]         = useState([]);
@@ -196,8 +197,8 @@ export default function Dashboard() {
 
   const filteredMedia = React.useMemo(() => {
     return mediaItems.filter(item => {
-      // Ignore list
-      if (settings.ignored_keywords?.length > 0) {
+      // Ignore list (can be bypassed by toggle)
+      if (!bypassIgnore && settings.ignored_keywords?.length > 0) {
         const searchStr = [item.path, item.releaseName, item.title, item.fileName].join(' ').toLowerCase();
         if (settings.ignored_keywords.some(kw => searchStr.includes(kw.toLowerCase()))) return false;
       }
@@ -222,7 +223,16 @@ export default function Dashboard() {
       // Display mode
       return displayMode === 'missing' ? !effectivelyInQbit : effectivelyInQbit;
     });
-  }, [mediaItems, displayMode, filterInstance, settings.ignored_keywords, selectedTrackers]);
+  }, [mediaItems, displayMode, filterInstance, settings.ignored_keywords, selectedTrackers, bypassIgnore]);
+
+  // Count how many items the ignore list hides (for the badge)
+  const ignoredCount = React.useMemo(() => {
+    if (!settings.ignored_keywords?.length) return 0;
+    return mediaItems.filter(item => {
+      const searchStr = [item.path, item.releaseName, item.title, item.fileName].join(' ').toLowerCase();
+      return settings.ignored_keywords.some(kw => searchStr.includes(kw.toLowerCase()));
+    }).length;
+  }, [mediaItems, settings.ignored_keywords]);
 
   const [searchLoading, setSearchLoading] = useState({});
 
@@ -409,7 +419,24 @@ export default function Dashboard() {
 
             {/* Ignore List */}
             <div style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '1rem', marginTop: '0.5rem' }}>
-              <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Ignore List</h3>
+              <div className="flex justify-between items-center mb-2">
+                <h3 style={{ margin: 0, fontSize: '1rem' }}>Ignore List</h3>
+                {settings.ignored_keywords?.length > 0 && (
+                  <button
+                    onClick={() => setBypassIgnore(b => !b)}
+                    title={bypassIgnore ? 'Ignore-Filter ist deaktiviert – klicken zum Aktivieren' : 'Ignore-Filter ist aktiv – klicken zum Deaktivieren'}
+                    style={{
+                      fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', fontWeight: 700,
+                      cursor: 'pointer', border: 'none', letterSpacing: '0.04em',
+                      background: bypassIgnore ? 'rgba(239,68,68,0.2)' : 'rgba(234,179,8,0.15)',
+                      color: bypassIgnore ? '#f87171' : '#fde047',
+                      outline: bypassIgnore ? '1px solid rgba(239,68,68,0.5)' : '1px solid rgba(234,179,8,0.4)',
+                    }}
+                  >
+                    {bypassIgnore ? '🚫 FILTER OFF' : `🔍 ${settings.ignored_keywords.length} aktiv`}
+                  </button>
+                )}
+              </div>
               <p className="mb-3" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Exclude items whose path/name contains:
               </p>
@@ -443,6 +470,11 @@ export default function Dashboard() {
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 style={{ margin: 0, whiteSpace: 'nowrap', fontSize: '1.5rem' }}>
                   {displayMode === 'missing' ? 'Missing Media' : 'Available Media'} ({filteredMedia.length})
+                  {bypassIgnore && ignoredCount > 0 && (
+                    <span style={{ fontSize: '0.7rem', fontWeight: 600, marginLeft: '8px', padding: '2px 8px', borderRadius: '12px', background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.4)', verticalAlign: 'middle' }}>
+                      +{ignoredCount} ignored visible
+                    </span>
+                  )}
                 </h3>
 
                 {/* Missing / Available toggle */}
@@ -467,6 +499,24 @@ export default function Dashboard() {
                     {instances.map(inst => <option key={inst.id} value={`name_${inst.name}`}>{inst.name}</option>)}
                   </optgroup>
                 </select>
+
+                {/* Ignore Filter Toggle (in toolbar, only visible when ignore list has entries) */}
+                {settings.ignored_keywords?.length > 0 && (
+                  <button
+                    onClick={() => setBypassIgnore(b => !b)}
+                    title={bypassIgnore ? 'Ignore-Filter deaktiviert – klicken zum Aktivieren' : `Ignore-Filter aktiv (versteckt ${ignoredCount} Items) – klicken zum Deaktivieren`}
+                    className="btn btn-sm"
+                    style={{
+                      fontSize: '0.75rem', padding: '0.4rem 0.8rem', whiteSpace: 'nowrap',
+                      background: bypassIgnore ? 'rgba(239,68,68,0.2)' : 'rgba(234,179,8,0.1)',
+                      color: bypassIgnore ? '#f87171' : '#fde047',
+                      border: bypassIgnore ? '1px solid rgba(239,68,68,0.5)' : '1px solid rgba(234,179,8,0.35)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {bypassIgnore ? '🚫 Ignore OFF' : `🔍 Ignore ON (${ignoredCount})`}
+                  </button>
+                )}
 
                 {/* Search All */}
                 {displayMode === 'missing' && (
