@@ -215,4 +215,42 @@ router.post('/cross-seed/search-all/cancel', (req, res) => {
 // --- Last Results ---
 router.get('/last-results', (req, res) => res.json(getLastResults()));
 
+// --- Debug: result breakdown by instance/type/method ---
+router.get('/debug', (req, res) => {
+  const { media = [] } = getLastResults();
+
+  // Group by instance
+  const byInstance = {};
+  for (const item of media) {
+    const key = item.instanceName || 'unknown';
+    if (!byInstance[key]) byInstance[key] = { total: 0, type: item.type, methods: {} };
+    byInstance[key].total++;
+    byInstance[key].methods[item.matchMethod] = (byInstance[key].methods[item.matchMethod] || 0) + 1;
+  }
+
+  // Type breakdown
+  const movies  = media.filter(m => m.type === 'movie');
+  const series  = media.filter(m => m.type === 'series');
+
+  // Method breakdown
+  const methods = {};
+  for (const item of media) methods[item.matchMethod] = (methods[item.matchMethod] || 0) + 1;
+
+  // Sample items
+  const sampleMovies  = movies.slice(0, 3).map(m => ({ title: m.title, instanceName: m.instanceName, inQbit: m.inQbit, matchMethod: m.matchMethod, path: m.path }));
+  const sampleSeries  = series.slice(0, 3).map(s => ({ title: s.title, instanceName: s.instanceName, inQbit: s.inQbit, matchMethod: s.matchMethod, path: s.path }));
+  const sampleMissing = media.filter(m => m.matchMethod === 'none').slice(0, 5).map(m => ({ title: m.title, type: m.type, instanceName: m.instanceName, path: m.path, releaseName: m.releaseName }));
+
+  res.json({
+    totalItems: media.length,
+    movieCount: movies.length,
+    seriesCount: series.length,
+    methodBreakdown: methods,
+    byInstance,
+    sampleMovies,
+    sampleSeries,
+    sampleMissing
+  });
+});
+
 module.exports = router;

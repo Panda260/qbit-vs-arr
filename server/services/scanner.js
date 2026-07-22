@@ -223,14 +223,17 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
 /**
  * Check if a given file path shares an inode with any torrent in the index.
  * Returns the matching torrent or null.
- * Uses nlink > 1 as a fast pre-check (no hardlinks → skip immediately).
+ *
+ * NOTE: We intentionally do NOT check nlink > 1 here. On some setups (e.g.
+ * bind-mounts, overlay filesystems, or cross-namespace hardlinks) the kernel
+ * can report nlink=1 even for genuine hardlinks. Skipping that check is safe
+ * because the inode lookup itself is authoritative.
  */
 function matchByInode(inodeIndex, filePath, pathFrom, pathTo) {
   if (!filePath || !inodeIndex || inodeIndex.size === 0) return null;
   const localPath = rewritePath(filePath, pathFrom, pathTo);
   try {
     const st = fs.statSync(localPath);
-    if (st.nlink <= 1) return null; // file has no hardlinks elsewhere
     const key = `${st.dev}:${st.ino}`;
     return inodeIndex.get(key) || null;
   } catch {
@@ -1124,7 +1127,31 @@ async function scanMedia(sendEvent) {
         }
       }
     }
-    
+
+    // ── Per-instance summary log ──────────────────────────────────────
+    const iTotal    = instanceResults.length;
+    const iHardlink = instanceResults.filter(r => r.matchMethod === 'hardlink').length;
+    const iHash     = instanceResults.filter(r => r.matchMethod === 'hash').length;
+    const iHistory  = instanceResults.filter(r => r.matchMethod === 'history').length;
+    const iName     = instanceResults.filter(r => r.matchMethod === 'name').length;
+    const iSize     = instanceResults.filter(r => r.matchMethod === 'size').length;
+    const iMissing  = instanceResults.filter(r => r.matchMethod === 'none').length;
+    const iType     = instanceResults[0]?.type ?? instance.type;
+    console.log(
+      `[${instance.name}] done: ${iTotal} ${iType}(s) | ` +
+      `hardlink=${iHardlink}, hash=${iHash}, history=${iHistory}, name=${iName}, size=${iSize}, missing=${iMissing}`
+    );
+    // Log first unmatched item to help diagnose path/name issues
+    const firstMissing = instanceResults.find(r => r.matchMethod === 'none');
+    if (firstMissing) {
+      console.log(`  [${instance.name}] first unmatched: "${firstMissing.title}" | path=${firstMissing.path} | releaseName=${firstMissing.releaseName}`);
+    }
+    // Log first matched item to confirm data looks right
+    const firstMatched = instanceResults.find(r => r.matchMethod !== 'none');
+    if (firstMatched) {
+      console.log(`  [${instance.name}] first matched (${firstMatched.matchMethod}): "${firstMatched.title}" | qbitPath=${firstMatched.path}`);
+    }
+
     instanceSendEvent('Finished', 100);
     return instanceResults;
   });
@@ -1142,12 +1169,20 @@ async function scanMedia(sendEvent) {
 
   internalSendEvent('progress', { global: true, step: 'Finalizing...', progress: 100 });
 
-  const historyMatches = results.filter(r => r.matchMethod === 'history').length;
-  const nameMatches    = results.filter(r => r.matchMethod === 'name').length;
-  const sizeMatches    = results.filter(r => r.matchMethod === 'size').length;
-  const missing        = results.filter(r => r.matchMethod === 'none').length;
+  const hardlinkMatches = results.filter(r => r.matchMethod === 'hardlink').length;
+  const hashMatches     = results.filter(r => r.matchMethod === 'hash').length;
+  const historyMatches  = results.filter(r => r.matchMethod === 'history').length;
+  const nameMatches     = results.filter(r => r.matchMethod === 'name').length;
+  const sizeMatches     = results.filter(r => r.matchMethod === 'size').length;
+  const missing         = results.filter(r => r.matchMethod === 'none').length;
+  const movieCount      = results.filter(r => r.type === 'movie').length;
+  const seriesCount     = results.filter(r => r.type === 'series').length;
 
-  console.log(`Scan done: ${results.length} items | history=${historyMatches}, name=${nameMatches}, size=${sizeMatches}, missing=${missing} | mode=${matchMode}`);
+  console.log(
+    `Scan done: ${results.length} items (movies=${movieCount}, series=${seriesCount}) | ` +
+    `hardlink=${hardlinkMatches}, hash=${hashMatches}, history=${historyMatches}, name=${nameMatches}, size=${sizeMatches}, missing=${missing} | ` +
+    `mode=${matchMode}`
+  );
 
   const finalResults = {
     media: results,
