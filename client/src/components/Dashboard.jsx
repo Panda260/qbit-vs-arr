@@ -196,11 +196,17 @@ export default function Dashboard() {
   };
 
   const filteredMedia = React.useMemo(() => {
-    return mediaItems.filter(item => {
-      // Ignore list (can be bypassed by toggle)
-      if (!bypassIgnore && settings.ignored_keywords?.length > 0) {
+    return mediaItems.map(item => {
+      let matchedKeywords = [];
+      if (settings.ignored_keywords?.length > 0) {
         const searchStr = [item.path, item.releaseName, item.title, item.fileName].join(' ').toLowerCase();
-        if (settings.ignored_keywords.some(kw => searchStr.includes(kw.toLowerCase()))) return false;
+        matchedKeywords = settings.ignored_keywords.filter(kw => searchStr.includes(kw.toLowerCase()));
+      }
+      return { ...item, matchedKeywords };
+    }).filter(item => {
+      // Ignore list (can be bypassed by toggle)
+      if (!bypassIgnore && item.matchedKeywords.length > 0) {
+        return false;
       }
       // Tracker filter logic:
       // An item is "effectively in qBit" (seeding) on the selected trackers IF:
@@ -570,6 +576,11 @@ export default function Dashboard() {
                         <span style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', background: item.type === 'movie' ? 'rgba(59,130,246,0.2)' : 'rgba(167,139,250,0.2)', color: item.type === 'movie' ? '#93c5fd' : '#d8b4fe' }}>
                           {item.type.toUpperCase()}
                         </span>
+                        {bypassIgnore && item.matchedKeywords?.length > 0 && (
+                          <span style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.4)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            🚫 Blocked by: {item.matchedKeywords.join(', ')}
+                          </span>
+                        )}
                         {displayMode === 'seeding' && item.inQbit && matchBadge(item.matchMethod)}
                       </div>
                     </div>
