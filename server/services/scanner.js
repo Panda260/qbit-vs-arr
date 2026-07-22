@@ -91,11 +91,11 @@ function hasGermanLanguage(arrItem, files, releaseName) {
   for (const f of fileList) {
     const langs = f.languages || (f.language ? [f.language] : []);
     for (const l of langs) {
-      if (l && l.name && /german|ger/i.test(l.name)) return true;
+      if (l && l.name && /german|\bger\b/i.test(l.name)) return true;
     }
-    if (f.relativePath && /german|\bger\b|\bdl\b|dual[\s_-]*language/i.test(f.relativePath)) return true;
+    if (f.relativePath && /german|\bger\b|(?<!web-?)\bdl\b|dual[\s_-]*language/i.test(f.relativePath)) return true;
   }
-  if (releaseName && /german|\bger\b|\bdl\b|dual[\s_-]*language/i.test(releaseName)) return true;
+  if (releaseName && /german|\bger\b|(?<!web-?)\bdl\b|dual[\s_-]*language/i.test(releaseName)) return true;
   return false;
 }
 
