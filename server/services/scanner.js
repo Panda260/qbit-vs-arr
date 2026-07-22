@@ -516,7 +516,7 @@ async function getRadarrMovieHistory(instance, movieId) {
   try {
     const response = await axiosWithRetry({
       method: 'get',
-      url: `${instance.url_internal}/api/v3/history`,
+      url: `${instance.url_internal}/api/v3/history/movie`,
       headers: { 'X-Api-Key': instance.api_key },
       params: { movieId, pageSize: 50, page: 1, sortKey: 'date', sortDirection: 'descending' },
       timeout: 10000
