@@ -118,9 +118,9 @@ async function getAllTrackerUrls(url, cookie, torrents) {
       trackers.forEach(u => {
         try {
           const host = new URL(u).host;
-          seen.add(host); // store just the host for readability
+          seen.add(host);
         } catch {
-          // skip invalid URLs
+          seen.add(u);
         }
       });
     }));
@@ -718,7 +718,9 @@ async function scanMedia(sendEvent) {
     await Promise.all(batch.map(async (t) => {
       try {
         const trackers = await getQbitTorrentTrackers(qbitUrl, cookie, t.hash);
-        t._trackerHosts = trackers.map(u => { try { return new URL(u).host; } catch { return null; } }).filter(Boolean);
+        t._trackerHosts = trackers.map(u => { 
+          try { return new URL(u).host; } catch { return u; } 
+        }).filter(Boolean);
         t._trackerHosts.forEach(h => allTrackerHosts.add(h));
       } catch (err) {
         console.error(`Failed to fetch trackers for ${t.name}:`, err.message);

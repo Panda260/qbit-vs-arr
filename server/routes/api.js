@@ -253,4 +253,97 @@ router.get('/debug', (req, res) => {
   });
 });
 
+router.get('/debug/item', async (req, res) => {
+  try {
+    const { id } = req.query; // the arr item ID, e.g., 'radarr-Radarr-1080p-1234'
+    const results = getLastResults();
+    if (!results || !results.media) {
+      return res.status(404).json({ error: "No scan results available. Run a scan first." });
+    }
+    
+    let items = results.media;
+    if (id) {
+      items = items.filter(m => m.id === id);
+    } else {
+      items = items.slice(0, 3); // return first 3 items as default debug sample
+    }
+    
+    if (items.length === 0) {
+      return res.status(404).json({ error: "Item not found in scan results." });
+    }
+    
+    // For each item, we want to look at the qBittorrent side if it matched
+    const debugInfo = [];
+    const { getQbitTorrents } = require('../services/qbit');
+    const db = require('../services/db');
+    const qbitUrl = db.getSetting('qbit_url');
+    const qbitUser = db.getSetting('qbit_user');
+    const qbitPass = db.getSetting('qbit_pass');
+    
+    // Attempt to log into qBit to get live tracker data
+    const qbAuth = await axios.post(`${qbitUrl}/api/v2/auth/login`, 
+      new URLSearchParams({ username: qbitUser, password: qbitPass }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    ).catch(() => null);
+    
+    let cookie = '';
+    if (qbAuth && qbAuth.headers['set-cookie']) {
+      cookie = qbAuth.headers['set-cookie'].join('; ');
+    }
+    
+    let allTorrents = [];
+    if (cookie) {
+      allTorrents = await getQbitTorrents(qbitUrl, cookie);
+    }
+
+    for (const item of items) {
+      const info = {
+        arrItem: item,
+        qbitMatches: []
+      };
+      
+      // If the scanner says it's inQbit, try to find which torrent(s) it might be
+      // We'll do a simple name/path search against allTorrents to guess which one it is
+      // since we don't store the exact qBittorrent hash in `item` (we only store boolean inQbit).
+      if (allTorrents.length > 0) {
+        // We look for torrents that contain the releaseName or the item path
+        const candidates = allTorrents.filter(t => 
+          t.name === item.releaseName || 
+          (t.content_path && t.content_path.includes(item.releaseName))
+        );
+        
+        for (const t of candidates) {
+          // Fetch trackers for this candidate
+          let trackers = [];
+          try {
+             const tr = await axios.get(`${qbitUrl}/api/v2/torrents/trackers`, {
+               headers: { Cookie: cookie },
+               params: { hash: t.hash }
+             });
+             trackers = (tr.data || []).map(x => x.url);
+          } catch(e) { trackers = ["error fetching trackers: " + e.message]; }
+          
+          info.qbitMatches.push({
+            hash: t.hash,
+            name: t.name,
+            content_path: t.content_path,
+            tags: t.tags,
+            category: t.category,
+            rawTrackers: trackers,
+            parsedTrackerHosts: trackers.map(u => {
+              try { return new URL(u).host; } catch { return u; }
+            }).filter(Boolean)
+          });
+        }
+      }
+      
+      debugInfo.push(info);
+    }
+    
+    res.json(debugInfo);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;
