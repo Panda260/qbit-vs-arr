@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [displayMode, setDisplayMode]     = useState('missing');
   const [showAllTags, setShowAllTags]     = useState(true);
   const [bypassIgnore, setBypassIgnore]   = useState(false);
+  const [germanOnly, setGermanOnly]       = useState(false);
   const [copiedId, setCopiedId]           = useState(null);
   const [settings, setSettings]           = useState({ ignored_keywords: [] });
   const [instances, setInstances]         = useState([]);
@@ -206,6 +207,11 @@ export default function Dashboard() {
     }).filter(item => {
       // Ignore list (can be bypassed by toggle)
       if (!bypassIgnore && item.matchedKeywords.length > 0) {
+        return false;
+      }
+      
+      // German Only filter
+      if (germanOnly && !item.isGerman) {
         return false;
       }
       // Tracker filter logic:
@@ -442,6 +448,19 @@ export default function Dashboard() {
                     {bypassIgnore ? '🚫 FILTER OFF' : `🔍 ${settings.ignored_keywords.length} aktiv`}
                   </button>
                 )}
+                <button
+                  onClick={() => setGermanOnly(g => !g)}
+                  title="Nur deutsche/DL Releases anzeigen"
+                  style={{
+                    fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', fontWeight: 700,
+                    cursor: 'pointer', border: 'none', letterSpacing: '0.04em', marginLeft: '6px',
+                    background: germanOnly ? 'rgba(34,197,94,0.15)' : 'rgba(148,163,184,0.1)',
+                    color: germanOnly ? '#4ade80' : 'var(--text-secondary)',
+                    outline: germanOnly ? '1px solid rgba(34,197,94,0.4)' : '1px solid rgba(148,163,184,0.3)',
+                  }}
+                >
+                  🇩🇪 GERMAN ONLY {germanOnly ? 'ON' : 'OFF'}
+                </button>
               </div>
               <p className="mb-3" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Exclude items whose path/name contains:

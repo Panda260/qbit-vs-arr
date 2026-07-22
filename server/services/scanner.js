@@ -84,6 +84,22 @@ async function getQbitTorrentFiles(url, cookie, hash) {
 }
 
 /**
+ * Checks if the Radarr/Sonarr item or its files indicate German language
+ */
+function hasGermanLanguage(arrItem, files, releaseName) {
+  let fileList = Array.isArray(files) ? files : [files].filter(Boolean);
+  for (const f of fileList) {
+    const langs = f.languages || (f.language ? [f.language] : []);
+    for (const l of langs) {
+      if (l && l.name && /german|ger/i.test(l.name)) return true;
+    }
+    if (f.relativePath && /german|\bger\b|\bdl\b|dual[\s_-]*language/i.test(f.relativePath)) return true;
+  }
+  if (releaseName && /german|\bger\b|\bdl\b|dual[\s_-]*language/i.test(releaseName)) return true;
+  return false;
+}
+
+/**
  * Fetch tracker URLs for a single torrent.
  * Returns array of announce URLs.
  */
@@ -943,6 +959,7 @@ async function scanMedia(sendEvent) {
 
         const actualPath = movie.path;
         const releaseName = matchingTorrents.length > 0 ? matchingTorrents[0].name : (mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title);
+        const isGerman = hasGermanLanguage(movie, mf, releaseName);
 
         instanceResults.push({
           id: `radarr-${instance.name}-${movie.id}`,
@@ -956,7 +973,8 @@ async function scanMedia(sendEvent) {
           qbitTags: Array.from(mediaTags),
           qbitTrackerHosts: Array.from(mediaTrackerHosts),
           inQbit: matchingTorrents.length > 0,
-          matchMethod
+          matchMethod,
+          isGerman
         });
       }
 
@@ -1119,6 +1137,8 @@ async function scanMedia(sendEvent) {
           const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
           const actualPath = fallbackPath;
           const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
+          const releaseName = matchingTorrents.length > 0 ? matchingTorrents[0].name : `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`;
+          const isGerman = hasGermanLanguage(show, seasonFiles, releaseName);
 
           instanceResults.push({
             id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
@@ -1127,12 +1147,13 @@ async function scanMedia(sendEvent) {
             instanceName: instance.name,
             arrUrl: `${instance.url_external}/series/${show.titleSlug}`,
             path: actualPath,
-            releaseName: matchingTorrents.length > 0 ? matchingTorrents[0].name : `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`,
+            releaseName,
             fileName: seasonFileNames,
             qbitTags: Array.from(mediaTags),
             qbitTrackerHosts: Array.from(mediaTrackerHosts),
             inQbit: matchingTorrents.length > 0,
-            matchMethod
+            matchMethod,
+            isGerman
           });
         }
       }
