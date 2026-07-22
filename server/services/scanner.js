@@ -5,6 +5,46 @@ const crypto = require('crypto');
 const db = require('./db');
 
 // ---------------------------------------------------------------------------
+// Resilient HTTP helper — retries on 5xx, 429, and network errors
+// ---------------------------------------------------------------------------
+
+async function axiosWithRetry(config, { retries = 3, baseDelay = 500, label = '' } = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await axios(config);
+    } catch (err) {
+      const status = err.response?.status;
+      const isRetryable =
+        status === 429 ||
+        (status >= 500 && status < 600) ||
+        err.code === 'ECONNRESET' ||
+        err.code === 'ETIMEDOUT' ||
+        err.code === 'ECONNABORTED' ||
+        err.code === 'EPIPE' ||
+        err.code === 'EAI_AGAIN';
+
+      if (!isRetryable || attempt === retries) {
+        throw err;
+      }
+
+      // Respect Retry-After header (in seconds) for 429
+      let delay = baseDelay * Math.pow(2, attempt);
+      if (status === 429) {
+        const retryAfter = parseInt(err.response?.headers?.['retry-after'], 10);
+        if (!isNaN(retryAfter) && retryAfter > 0) {
+          delay = Math.max(delay, retryAfter * 1000);
+        }
+      }
+
+      if (label) {
+        console.warn(`[Retry ${attempt + 1}/${retries}] ${label} — ${status || err.code} — waiting ${delay}ms`);
+      }
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // qBittorrent helpers
 // ---------------------------------------------------------------------------
 
@@ -370,9 +410,12 @@ function matchBySize(sizeIndex, fileSizeBytes) {
 
 async function getRadarrMovies(instance) {
   try {
-    const response = await axios.get(`${instance.url_internal}/api/v3/movie`, {
-      headers: { 'X-Api-Key': instance.api_key }
-    });
+    const response = await axiosWithRetry({
+      method: 'get',
+      url: `${instance.url_internal}/api/v3/movie`,
+      headers: { 'X-Api-Key': instance.api_key },
+      timeout: 30000
+    }, { label: `Radarr movies (${instance.name})` });
     return response.data.filter(m => m.hasFile);
   } catch (error) {
     console.error(`Failed to fetch Radarr movies (${instance.name}):`, error.message);
@@ -382,9 +425,12 @@ async function getRadarrMovies(instance) {
 
 async function getSonarrSeries(instance) {
   try {
-    const response = await axios.get(`${instance.url_internal}/api/v3/series`, {
-      headers: { 'X-Api-Key': instance.api_key }
-    });
+    const response = await axiosWithRetry({
+      method: 'get',
+      url: `${instance.url_internal}/api/v3/series`,
+      headers: { 'X-Api-Key': instance.api_key },
+      timeout: 30000
+    }, { label: `Sonarr series (${instance.name})` });
     return response.data.filter(s => s.statistics && s.statistics.episodeFileCount > 0);
   } catch (error) {
     console.error(`Failed to fetch Sonarr series (${instance.name}):`, error.message);
@@ -394,9 +440,13 @@ async function getSonarrSeries(instance) {
 
 async function getSonarrEpisodeFiles(instance, seriesId) {
   try {
-    const response = await axios.get(`${instance.url_internal}/api/v3/episodefile?seriesId=${seriesId}`, {
-      headers: { 'X-Api-Key': instance.api_key }
-    });
+    const response = await axiosWithRetry({
+      method: 'get',
+      url: `${instance.url_internal}/api/v3/episodefile`,
+      headers: { 'X-Api-Key': instance.api_key },
+      params: { seriesId },
+      timeout: 15000
+    }, { label: `Sonarr episodefiles series=${seriesId}` });
     return response.data || [];
   } catch {
     return [];
@@ -412,10 +462,13 @@ async function getSonarrEpisodeFiles(instance, seriesId) {
  */
 async function getRadarrMovieHistory(instance, movieId) {
   try {
-    const response = await axios.get(`${instance.url_internal}/api/v3/history`, {
+    const response = await axiosWithRetry({
+      method: 'get',
+      url: `${instance.url_internal}/api/v3/history`,
       headers: { 'X-Api-Key': instance.api_key },
-      params: { movieId, pageSize: 50, page: 1, sortKey: 'date', sortDirection: 'descending' }
-    });
+      params: { movieId, pageSize: 50, page: 1, sortKey: 'date', sortDirection: 'descending' },
+      timeout: 10000
+    }, { label: `Radarr history movie=${movieId}` });
     const records = response.data?.records || [];
     for (const rec of records) {
       if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
@@ -440,10 +493,13 @@ async function getRadarrMovieHistory(instance, movieId) {
  */
 async function getSonarrSeriesHistory(instance, seriesId) {
   try {
-    const response = await axios.get(`${instance.url_internal}/api/v3/history/series`, {
+    const response = await axiosWithRetry({
+      method: 'get',
+      url: `${instance.url_internal}/api/v3/history/series`,
       headers: { 'X-Api-Key': instance.api_key },
-      params: { seriesId }
-    });
+      params: { seriesId },
+      timeout: 15000
+    }, { label: `Sonarr history series=${seriesId}` });
     const records = (response.data || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     for (const rec of records) {
       if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
@@ -735,13 +791,62 @@ async function scanMedia(sendEvent) {
     if (instance.type === 'radarr') {
       const movies = await getRadarrMovies(instance);
 
+      // ── Pre-fetch all history in batches (concurrency-controlled) ──
+      const needsHistory = matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash';
+      const movieHistoryMap = new Map(); // movieId → { sourceTitle, torrentHash }
+      if (needsHistory && movies.length > 0) {
+        const HISTORY_BATCH = 10;
+        let historyFailed = 0;
+        const historyStartTime = Date.now();
+        instanceSendEvent(`Fetching history (0/${movies.length})...`, 0);
+
+        for (let i = 0; i < movies.length; i += HISTORY_BATCH) {
+          checkCancel();
+          const batch = movies.slice(i, i + HISTORY_BATCH);
+
+          await Promise.all(batch.map(async (movie) => {
+            const hist = await getRadarrMovieHistory(instance, movie.id);
+            if (hist.sourceTitle || hist.torrentHash) {
+              movieHistoryMap.set(movie.id, hist);
+            } else {
+              // Track if we got no data (might be a real "no history" or a failed call)
+              movieHistoryMap.set(movie.id, hist);
+            }
+          })).catch(err => {
+            historyFailed += batch.length;
+            console.warn(`History batch failed for ${instance.name}: ${err.message}`);
+          });
+
+          // Progress + ETA
+          const done = Math.min(i + HISTORY_BATCH, movies.length);
+          const elapsed = Date.now() - historyStartTime;
+          const avgTime = elapsed / done;
+          const remaining = movies.length - done;
+          const etaSec = Math.round((remaining * avgTime) / 1000);
+          const eta = etaSec > 60 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : `${etaSec}s`;
+          const pct = Math.floor((done / movies.length) * 40);
+          instanceSendEvent(`Fetching history (${done}/${movies.length}) - noch ca. ${eta}`, Math.min(40, pct));
+
+          // Small cooldown to avoid overwhelming Radarr
+          if (i + HISTORY_BATCH < movies.length) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        }
+
+        if (historyFailed > 0) {
+          console.warn(`Radarr ${instance.name}: ${historyFailed}/${movies.length} history calls failed after retries.`);
+        }
+        console.log(`Radarr ${instance.name}: History pre-fetch done. ${movieHistoryMap.size} entries, ${historyFailed} failed.`);
+      }
+
+      // ── Now match each movie (fast — no more API calls) ──
       for (let i = 0; i < movies.length; i++) {
         checkCancel();
         const movie = movies[i];
         
         // Update UI and yield every 10 items to reduce overhead
         if ((i + 1) % 10 === 0 || (i + 1) === movies.length) {
-          const itemProgress = Math.floor(((i + 1) / movies.length) * 100);
+          const itemProgress = 40 + Math.floor(((i + 1) / movies.length) * 59);
           instanceSendEvent(`[${i + 1}/${movies.length}] ${movie.title}`, Math.min(99, itemProgress));
           await new Promise(resolve => setImmediate(resolve));
         }
@@ -755,11 +860,11 @@ async function scanMedia(sendEvent) {
           ? fileAliases
           : [movie.title, movie.originalTitle, movie.folderName].filter(Boolean);
 
-        // ── HYBRID / HARDLINK / FAST_HASH MODE: fetch history ────────────────────────────
+        // ── Use pre-fetched history ────────────────────────────
         let historySourceTitle = null;
         let historyTorrentHash = null;
-        if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
-          const hist = await getRadarrMovieHistory(instance, movie.id);
+        if (needsHistory) {
+          const hist = movieHistoryMap.get(movie.id) || { sourceTitle: null, torrentHash: null };
           historySourceTitle = hist.sourceTitle;
           historyTorrentHash = hist.torrentHash;
         }
@@ -846,28 +951,83 @@ async function scanMedia(sendEvent) {
 
     } else if (instance.type === 'sonarr') {
       const series = await getSonarrSeries(instance);
+      const needsHistory = matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash';
 
+      // ── Pre-fetch all history + episode files in batches ──
+      const seriesHistoryMap = new Map(); // seriesId → { sourceTitle, torrentHash }
+      const seriesEpFilesMap = new Map(); // seriesId → episodeFiles[]
+      if (series.length > 0) {
+        const SERIES_BATCH = 10;
+        let batchFailed = 0;
+        const batchStartTime = Date.now();
+        instanceSendEvent(`Fetching series data (0/${series.length})...`, 0);
+
+        for (let i = 0; i < series.length; i += SERIES_BATCH) {
+          checkCancel();
+          const batch = series.slice(i, i + SERIES_BATCH);
+
+          await Promise.all(batch.map(async (show) => {
+            // Fetch episode files
+            try {
+              const epFiles = await getSonarrEpisodeFiles(instance, show.id);
+              seriesEpFilesMap.set(show.id, epFiles);
+            } catch {
+              seriesEpFilesMap.set(show.id, []);
+            }
+
+            // Fetch history if needed
+            if (needsHistory) {
+              const hist = await getSonarrSeriesHistory(instance, show.id);
+              seriesHistoryMap.set(show.id, hist);
+            }
+          })).catch(err => {
+            batchFailed += batch.length;
+            console.warn(`Sonarr batch failed for ${instance.name}: ${err.message}`);
+          });
+
+          // Progress + ETA
+          const done = Math.min(i + SERIES_BATCH, series.length);
+          const elapsed = Date.now() - batchStartTime;
+          const avgTime = elapsed / done;
+          const remaining = series.length - done;
+          const etaSec = Math.round((remaining * avgTime) / 1000);
+          const eta = etaSec > 60 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : `${etaSec}s`;
+          const pct = Math.floor((done / series.length) * 40);
+          instanceSendEvent(`Fetching series data (${done}/${series.length}) - noch ca. ${eta}`, Math.min(40, pct));
+
+          // Small cooldown
+          if (i + SERIES_BATCH < series.length) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        }
+
+        if (batchFailed > 0) {
+          console.warn(`Sonarr ${instance.name}: ${batchFailed}/${series.length} series batch calls failed.`);
+        }
+        console.log(`Sonarr ${instance.name}: Pre-fetch done. ${seriesEpFilesMap.size} ep-file sets, ${seriesHistoryMap.size} history entries.`);
+      }
+
+      // ── Now match each series/season (fast — no more API calls) ──
       for (let i = 0; i < series.length; i++) {
         checkCancel();
         const show = series[i];
 
         // Update UI and yield every 10 items to reduce overhead
         if ((i + 1) % 10 === 0 || (i + 1) === series.length) {
-          const itemProgress = Math.floor(((i + 1) / series.length) * 100);
+          const itemProgress = 40 + Math.floor(((i + 1) / series.length) * 59);
           instanceSendEvent(`[${i + 1}/${series.length}] ${show.title}`, Math.min(99, itemProgress));
           await new Promise(resolve => setImmediate(resolve));
         }
 
         if (!show.seasons) continue;
 
-        let episodeFiles = [];
-        try { episodeFiles = await getSonarrEpisodeFiles(instance, show.id); } catch {}
+        const episodeFiles = seriesEpFilesMap.get(show.id) || [];
 
-        // HYBRID / HARDLINK / FAST_HASH: get latest grabbed sourceTitle + torrentHash for the series
+        // Use pre-fetched history
         let historySourceTitle = null;
         let historyTorrentHash = null;
-        if (matchMode === 'hybrid' || matchMode === 'hardlink' || matchMode === 'fast_hash') {
-          const hist = await getSonarrSeriesHistory(instance, show.id);
+        if (needsHistory) {
+          const hist = seriesHistoryMap.get(show.id) || { sourceTitle: null, torrentHash: null };
           historySourceTitle = hist.sourceTitle;
           historyTorrentHash = hist.torrentHash;
         }
