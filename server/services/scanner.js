@@ -742,10 +742,10 @@ async function scanMedia(sendEvent) {
   console.log('Finished fetching tracker info.');
   internalSendEvent('progress', { global: true, step: 'Applying tracker filters...', progress: 24 });
 
-  // Apply tracker filter: only consider torrents matching selected tracker hosts
-  const torrents = selectedTrackerHosts.length > 0
-    ? allTorrents.filter(t => torrentHasTracker(t, selectedTrackerHosts))
-    : allTorrents;
+  // We no longer filter torrents in the backend!
+  // The backend always matches against ALL torrents so we know exactly which trackers a file is seeding on.
+  // The UI will handle the tracker filtering dynamically to decide if it's "missing" from the selected tracker.
+  const torrents = allTorrents;
 
   internalSendEvent('progress', { global: true, step: `Starting file index (${torrents.length} items)...`, progress: 25 });
   await new Promise(resolve => setImmediate(resolve)); // Yield to flush messages
