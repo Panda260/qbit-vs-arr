@@ -100,6 +100,33 @@ function hasGermanLanguage(arrItem, files, releaseName) {
 }
 
 /**
+ * Returns a summary string of the languages reported by Radarr/Sonarr.
+ * e.g., "German, English" or "9x German, English | 1x English"
+ */
+function getLanguageSummary(files) {
+  let fileList = Array.isArray(files) ? files : [files].filter(Boolean);
+  if (fileList.length === 0) return "Unknown";
+  
+  const counts = {};
+  for (const f of fileList) {
+    const langs = f.languages || (f.language ? [f.language] : []);
+    const langNames = langs.map(l => l.name).filter(Boolean);
+    const key = langNames.length > 0 ? langNames.join(', ') : "Unknown";
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  
+  const summaries = [];
+  for (const [lang, count] of Object.entries(counts)) {
+    if (fileList.length === 1) {
+      summaries.push(lang);
+    } else {
+      summaries.push(`${count}x ${lang}`);
+    }
+  }
+  return summaries.join(' | ');
+}
+
+/**
  * Fetch tracker URLs for a single torrent.
  * Returns array of announce URLs.
  */
@@ -960,6 +987,7 @@ async function scanMedia(sendEvent) {
         const actualPath = movie.path;
         const releaseName = matchingTorrents.length > 0 ? matchingTorrents[0].name : (mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title);
         const isGerman = hasGermanLanguage(movie, mf, releaseName);
+        const arrLanguage = getLanguageSummary(mf);
 
         instanceResults.push({
           id: `radarr-${instance.name}-${movie.id}`,
@@ -974,7 +1002,8 @@ async function scanMedia(sendEvent) {
           qbitTrackerHosts: Array.from(mediaTrackerHosts),
           inQbit: matchingTorrents.length > 0,
           matchMethod,
-          isGerman
+          isGerman,
+          arrLanguage
         });
       }
 
@@ -1139,6 +1168,7 @@ async function scanMedia(sendEvent) {
           const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
           const releaseName = matchingTorrents.length > 0 ? matchingTorrents[0].name : `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`;
           const isGerman = hasGermanLanguage(show, seasonFiles, releaseName);
+          const arrLanguage = getLanguageSummary(seasonFiles);
 
           instanceResults.push({
             id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
@@ -1153,7 +1183,8 @@ async function scanMedia(sendEvent) {
             qbitTrackerHosts: Array.from(mediaTrackerHosts),
             inQbit: matchingTorrents.length > 0,
             matchMethod,
-            isGerman
+            isGerman,
+            arrLanguage
           });
         }
       }

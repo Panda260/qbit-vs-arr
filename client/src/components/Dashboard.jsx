@@ -606,8 +606,11 @@ export default function Dashboard() {
                     <p style={{ fontSize: '0.95rem', color: '#60a5fa', fontWeight: 500, marginBottom: '0.5rem', wordBreak: 'break-all' }}>
                       {item.releaseName}
                     </p>
-                    <div className="flex gap-4 items-center mb-2">
+                    <div className="flex gap-4 items-center mb-2 flex-wrap">
                       <p style={{ fontSize: '0.85rem', margin: 0 }}><span style={{ color: 'var(--text-secondary)' }}>Instance:</span> {item.instanceName}</p>
+                      {item.arrLanguage && item.arrLanguage !== 'Unknown' && (
+                        <p style={{ fontSize: '0.85rem', margin: 0 }}><span style={{ color: 'var(--text-secondary)' }}>Language:</span> {item.arrLanguage}</p>
+                      )}
                       <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', wordBreak: 'break-all', margin: 0 }}>{item.path}</p>
                     </div>
                     {displayMode === 'seeding' && showAllTags && item.inQbit && item.qbitTags.length > 0 && (
