@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
-import { Settings as SettingsIcon, LayoutDashboard, LogOut } from 'lucide-react';
+import { Settings as SettingsIcon, LayoutDashboard, LogOut, Server } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import Settings from './components/Settings';
+import Debug from './components/Debug';
 import Login from './components/Login';
 import axios from 'axios';
 import './styles/main.css';
@@ -70,6 +71,9 @@ function App() {
               <Link to="/" className="nav-link flex items-center gap-2">
                 <LayoutDashboard size={18} /> Dashboard
               </Link>
+              <Link to="/debug" className="nav-link flex items-center gap-2">
+                <Server size={18} /> Debug
+              </Link>
               <Link to="/settings" className="nav-link flex items-center gap-2">
                 <SettingsIcon size={18} /> Settings
               </Link>
@@ -86,6 +90,7 @@ function App() {
           <Routes>
             <Route path="/login" element={!isAuthenticated ? <Login onLogin={handleLogin} /> : <Navigate to="/" />} />
             <Route path="/" element={isAuthenticated ? <Dashboard /> : <Navigate to="/login" />} />
+            <Route path="/debug" element={isAuthenticated ? <Debug /> : <Navigate to="/login" />} />
             <Route path="/settings" element={isAuthenticated ? <Settings /> : <Navigate to="/login" />} />
           </Routes>
         </main>
