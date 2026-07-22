@@ -158,7 +158,8 @@ async function walkDirForVideos(dirPath, torrent, inodeIndex) {
           const st = await fs.promises.stat(fullPath);
           if (st.size >= MKV_MIN_SIZE_BYTES) {
             const key = `${st.dev}:${st.ino}`;
-            if (!inodeIndex.has(key)) inodeIndex.set(key, torrent);
+            if (!inodeIndex.has(key)) inodeIndex.set(key, [torrent]);
+            else inodeIndex.get(key).push(torrent);
           }
         } catch { /* skip */ }
       }
@@ -190,7 +191,8 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
         if (st.isFile()) {
           if (VIDEO_EXTENSIONS.test(localPath) && st.size >= MKV_MIN_SIZE_BYTES) {
             const key = `${st.dev}:${st.ino}`;
-            if (!inodeIndex.has(key)) inodeIndex.set(key, torrent);
+            if (!inodeIndex.has(key)) inodeIndex.set(key, [torrent]);
+            else inodeIndex.get(key).push(torrent);
           }
         } else if (st.isDirectory()) {
           await walkDirForVideos(localPath, torrent, inodeIndex);
@@ -235,9 +237,9 @@ function matchByInode(inodeIndex, filePath, pathFrom, pathTo) {
   try {
     const st = fs.statSync(localPath);
     const key = `${st.dev}:${st.ino}`;
-    return inodeIndex.get(key) || null;
+    return inodeIndex.get(key) || [];
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -284,8 +286,9 @@ async function walkDirForHashes(dirPath, torrent, hashIndex) {
         await walkDirForHashes(fullPath, torrent, hashIndex);
       } else if (entry.isFile() && VIDEO_EXTENSIONS.test(entry.name)) {
         const hashKey = await calculatePartialHash(fullPath);
-        if (hashKey && !hashIndex.has(hashKey)) {
-          hashIndex.set(hashKey, torrent);
+        if (hashKey) {
+          if (!hashIndex.has(hashKey)) hashIndex.set(hashKey, [torrent]);
+          else hashIndex.get(hashKey).push(torrent);
         }
       }
     }
@@ -308,7 +311,10 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
         const st = await fs.promises.stat(localPath);
         if (st.isFile()) {
           const hashKey = await calculatePartialHash(localPath);
-          if (hashKey && !hashIndex.has(hashKey)) hashIndex.set(hashKey, torrent);
+          if (hashKey) {
+            if (!hashIndex.has(hashKey)) hashIndex.set(hashKey, [torrent]);
+            else hashIndex.get(hashKey).push(torrent);
+          }
         } else if (st.isDirectory()) {
           await walkDirForHashes(localPath, torrent, hashIndex);
         }
@@ -344,10 +350,10 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
 }
 
 function matchByPartialHash(hashIndex, filePath, pathFrom, pathTo) {
-  if (!filePath || !hashIndex || hashIndex.size === 0) return null;
+  if (!filePath || !hashIndex || hashIndex.size === 0) return [];
   const localPath = rewritePath(filePath, pathFrom, pathTo);
-  const hashKey = calculatePartialHash(localPath);
-  return hashKey ? hashIndex.get(hashKey) || null : null;
+  const hashKey = calculatePartialHashSync(localPath);
+  return hashKey ? hashIndex.get(hashKey) || [] : [];
 }
 
 async function buildSizeIndex(torrents, url, cookie, sendEvent) {
@@ -889,8 +895,8 @@ async function scanMedia(sendEvent) {
         if (matchMode === 'fast_hash' && hashIndex && mf) {
           const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
           if (arrFilePath) {
-            const hashMatch = matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
-            if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; }
+            const hashMatches = matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+            if (hashMatches && hashMatches.length > 0) { matchingTorrents = hashMatches; matchMethod = 'fast_hash'; }
           }
         }
 
@@ -898,8 +904,8 @@ async function scanMedia(sendEvent) {
         if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && mf) {
           const arrFilePath = mf.path || (movie.path && mf.relativePath ? nodePath.join(movie.path, mf.relativePath) : null);
           if (arrFilePath) {
-            const inoMatch = matchByInode(inodeIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
-            if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; }
+            const inoMatches = matchByInode(inodeIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+            if (inoMatches && inoMatches.length > 0) { matchingTorrents = inoMatches; matchMethod = 'hardlink'; }
           }
         }
 
@@ -1057,9 +1063,10 @@ async function scanMedia(sendEvent) {
           // Step -2: Partial Hash match on episode files
           if (matchMode === 'fast_hash' && hashIndex && seasonFiles.length > 0) {
             for (const ef of seasonFiles) {
-              if (ef.path) {
-                const hashMatch = matchByPartialHash(hashIndex, ef.path, pathReplaceFrom, pathReplaceTo);
-                if (hashMatch) { matchingTorrents = [hashMatch]; matchMethod = 'fast_hash'; break; }
+              const arrFilePath = ef.path || (show.path && ef.relativePath ? nodePath.join(show.path, ef.relativePath) : null);
+              if (arrFilePath) {
+                const hashMatches = matchByPartialHash(hashIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+                if (hashMatches && hashMatches.length > 0) { matchingTorrents = hashMatches; matchMethod = 'fast_hash'; break; }
               }
             }
           }
@@ -1067,9 +1074,10 @@ async function scanMedia(sendEvent) {
           // Step -1: Hardlink (inode) match on episode files
           if (matchingTorrents.length === 0 && matchMode === 'hardlink' && inodeIndex && seasonFiles.length > 0) {
             for (const ef of seasonFiles) {
-              if (ef.path) {
-                const inoMatch = matchByInode(inodeIndex, ef.path, pathReplaceFrom, pathReplaceTo);
-                if (inoMatch) { matchingTorrents = [inoMatch]; matchMethod = 'hardlink'; break; }
+              const arrFilePath = ef.path || (show.path && ef.relativePath ? nodePath.join(show.path, ef.relativePath) : null);
+              if (arrFilePath) {
+                const inoMatches = matchByInode(inodeIndex, arrFilePath, pathReplaceFrom, pathReplaceTo);
+                if (inoMatches && inoMatches.length > 0) { matchingTorrents = inoMatches; matchMethod = 'hardlink'; break; }
               }
             }
           }
