@@ -933,7 +933,7 @@ async function scanMedia(sendEvent) {
           if (t._trackerHosts) t._trackerHosts.forEach(h => mediaTrackerHosts.add(h));
         });
 
-        const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : movie.path;
+        const actualPath = movie.path;
         const releaseName = mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title;
 
         instanceResults.push({
@@ -1107,7 +1107,7 @@ async function scanMedia(sendEvent) {
           });
 
           const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
-          const actualPath = matchingTorrents.length > 0 ? matchingTorrents[0].content_path : fallbackPath;
+          const actualPath = fallbackPath;
           const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
 
           instanceResults.push({
