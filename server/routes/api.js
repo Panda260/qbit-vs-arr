@@ -255,7 +255,7 @@ router.get('/debug', (req, res) => {
 
 router.get('/debug/item', async (req, res) => {
   try {
-    const { id } = req.query; // the arr item ID, e.g., 'radarr-Radarr-1080p-1234'
+    const { id, title } = req.query; // the arr item ID, e.g., 'radarr-Radarr-1080p-1234'
     const results = getLastResults();
     if (!results || !results.media) {
       return res.status(404).json({ error: "No scan results available. Run a scan first." });
@@ -264,6 +264,9 @@ router.get('/debug/item', async (req, res) => {
     let items = results.media;
     if (id) {
       items = items.filter(m => m.id === id);
+    } else if (title) {
+      const q = title.toLowerCase();
+      items = items.filter(m => m.title.toLowerCase().includes(q) || (m.releaseName && m.releaseName.toLowerCase().includes(q)));
     } else {
       items = items.slice(0, 3); // return first 3 items as default debug sample
     }
@@ -306,18 +309,22 @@ router.get('/debug/item', async (req, res) => {
     for (const item of items) {
       const info = {
         arrItem: item,
-        qbitMatches: []
+        qbitCandidates: []
       };
       
-      // If the scanner says it's inQbit, try to find which torrent(s) it might be
-      // We'll do a simple name/path search against allTorrents to guess which one it is
-      // since we don't store the exact qBittorrent hash in `item` (we only store boolean inQbit).
       if (allTorrents.length > 0) {
-        // We look for torrents that contain the releaseName or the item path
-        const candidates = allTorrents.filter(t => 
-          t.name === item.releaseName || 
-          (t.content_path && t.content_path.includes(item.releaseName))
-        );
+        const titleLower = item.title.toLowerCase();
+        const releaseLower = (item.releaseName || '').toLowerCase();
+        
+        // Find torrents that share the title or release name
+        const candidates = allTorrents.filter(t => {
+          const tName = t.name.toLowerCase();
+          const tPath = (t.content_path || '').toLowerCase();
+          return tName === releaseLower || 
+                 tPath.includes(releaseLower) ||
+                 tName.includes(titleLower) ||
+                 tPath.includes(titleLower);
+        });
         
         for (const t of candidates) {
           // Fetch trackers for this candidate
@@ -330,7 +337,7 @@ router.get('/debug/item', async (req, res) => {
              trackers = (tr.data || []).map(x => x.url);
           } catch(e) { trackers = ["error fetching trackers: " + e.message]; }
           
-          info.qbitMatches.push({
+          info.qbitCandidates.push({
             hash: t.hash,
             name: t.name,
             content_path: t.content_path,
