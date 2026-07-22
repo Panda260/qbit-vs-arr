@@ -582,11 +582,6 @@ export default function Dashboard() {
                           </span>
                         )}
                         {displayMode === 'seeding' && item.inQbit && matchBadge(item.matchMethod)}
-                        {displayMode === 'missing' && item.inQbit && (
-                          <span style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', background: 'rgba(234,179,8,0.15)', color: '#fde047', border: '1px solid rgba(234,179,8,0.4)', display: 'flex', alignItems: 'center', gap: '4px' }} title="This file is seeding in qBittorrent, but not on your selected Tracker Filter">
-                            <RefreshCw size={10} /> On other tracker: {item.qbitTrackerHosts?.join(', ') || 'Unknown'}
-                          </span>
-                        )}
                       </div>
                     </div>
                     <p style={{ fontSize: '0.95rem', color: '#60a5fa', fontWeight: 500, marginBottom: '0.5rem', wordBreak: 'break-all' }}>
