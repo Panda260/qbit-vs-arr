@@ -551,10 +551,21 @@ async function getRadarrMovieHistory(instance, movieId) {
   }
 }
 
+function extractSeasonNumber(rec) {
+  if (rec.seasonNumber !== undefined && rec.seasonNumber !== null) return rec.seasonNumber;
+  if (rec.episode && rec.episode.seasonNumber !== undefined && rec.episode.seasonNumber !== null) {
+    return rec.episode.seasonNumber;
+  }
+  if (rec.sourceTitle) {
+    const match = rec.sourceTitle.match(/(?:S|Season\s*|Staffel\s*)0?(\d{1,2})/i);
+    if (match) return parseInt(match[1], 10);
+  }
+  return null;
+}
+
 /**
- * Fetch Sonarr series history and return { sourceTitle, torrentHash } from the
- * most recent grabbed/imported event. For individual episode grabs, strips
- * the episode number so the result works as a season-pack name.
+ * Fetch Sonarr series history and return a Map of seasonNumber -> { sourceTitle, torrentHash }
+ * from the most recent grabbed/imported event for each season.
  */
 async function getSonarrSeriesHistory(instance, seriesId) {
   try {
@@ -565,31 +576,37 @@ async function getSonarrSeriesHistory(instance, seriesId) {
       params: { seriesId },
       timeout: 15000
     }, { label: `Sonarr history series=${seriesId}` });
+    
     const records = (response.data || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+    const seasonHistoryMap = new Map(); // seasonNumber (number) -> { sourceTitle, torrentHash }
+
     for (const rec of records) {
       if ((rec.eventType === 'grabbed' || rec.eventType === 'downloadFolderImported') && rec.sourceTitle) {
-        let title = rec.sourceTitle;
+        const sNum = extractSeasonNumber(rec);
+        if (sNum === null) continue;
 
-        // Individual episode grab → strip episode number → season-pack name
-        // e.g. "Hijack.S01E07.GERMAN..." → "Hijack.S01.GERMAN..."
-        // Guard: don't strip multi-episode ranges like S01E01-E07
-        const isEpisode = /S\d{1,2}E\d{1,2}(?!-E)/i.test(title);
-        if (isEpisode) {
-          title = title.replace(/E\d{1,2}/i, '');
+        if (!seasonHistoryMap.has(sNum)) {
+          let title = rec.sourceTitle;
+
+          // Individual episode grab → strip episode number → season-pack name
+          const isEpisode = /S\d{1,2}E\d{1,2}(?!-E)/i.test(title);
+          if (isEpisode) {
+            title = title.replace(/E\d{1,2}/i, '');
+          }
+
+          const isQbit = rec.data?.downloadClient?.toLowerCase().includes('qbittorrent');
+          const rawHash = rec.downloadId || rec.data?.torrentInfoHash || '';
+          const torrentHash = isQbit && rawHash.match(/^[0-9a-f]{40}$/i)
+            ? rawHash.toLowerCase()
+            : null;
+
+          seasonHistoryMap.set(sNum, { sourceTitle: title, torrentHash });
         }
-
-        const isQbit = rec.data?.downloadClient?.toLowerCase().includes('qbittorrent');
-        const rawHash = rec.downloadId || rec.data?.torrentInfoHash || '';
-        const torrentHash = isQbit && rawHash.match(/^[0-9a-f]{40}$/i)
-          ? rawHash.toLowerCase()
-          : null;
-
-        return { sourceTitle: title, torrentHash };
       }
     }
-    return { sourceTitle: null, torrentHash: null };
+    return seasonHistoryMap;
   } catch {
-    return { sourceTitle: null, torrentHash: null };
+    return new Map();
   }
 }
 
@@ -1094,20 +1111,22 @@ async function scanMedia(sendEvent) {
         if (!show.seasons) continue;
 
         const episodeFiles = seriesEpFilesMap.get(show.id) || [];
-
-        // Use pre-fetched history
-        let historySourceTitle = null;
-        let historyTorrentHash = null;
-        if (needsHistory) {
-          const hist = seriesHistoryMap.get(show.id) || { sourceTitle: null, torrentHash: null };
-          historySourceTitle = hist.sourceTitle;
-          historyTorrentHash = hist.torrentHash;
-        }
+        const showHistMap = seriesHistoryMap.get(show.id);
 
         for (const season of show.seasons) {
           if (!season.statistics || season.statistics.episodeFileCount === 0) continue;
           const sNum = season.seasonNumber;
           const seasonFiles = episodeFiles.filter(f => f.seasonNumber === sNum);
+
+          // Get history for THIS specific season
+          let historySourceTitle = null;
+          let historyTorrentHash = null;
+          if (needsHistory && showHistMap && showHistMap.has(sNum)) {
+            const hist = showHistMap.get(sNum);
+            historySourceTitle = hist.sourceTitle;
+            historyTorrentHash = hist.torrentHash;
+          }
+
           const seasonSceneNames = [...new Set(seasonFiles.map(f => f.sceneName).filter(Boolean))];
           const seasonPaths     = [...new Set(seasonFiles.map(f => f.relativePath).filter(Boolean))];
 
@@ -1177,10 +1196,19 @@ async function scanMedia(sendEvent) {
             if (t._trackerHosts) t._trackerHosts.forEach(h => mediaTrackerHosts.add(h));
           });
 
-          const fallbackPath = `${show.path}/Season ${String(sNum).padStart(2, '0')}`;
-          const actualPath = fallbackPath;
+          // Determine real season folder path from files if available
+          let seasonFolderPath = null;
+          if (seasonFiles.length > 0 && seasonFiles[0].relativePath) {
+            const relDir = nodePath.dirname(seasonFiles[0].relativePath);
+            if (relDir && relDir !== '.' && relDir !== '') {
+              seasonFolderPath = nodePath.join(show.path, relDir).replace(/\\/g, '/');
+            }
+          }
+          const actualPath = seasonFolderPath || (sNum === 0 ? `${show.path}/Specials` : `${show.path}/Season ${sNum}`);
           const seasonFileNames = seasonFiles.map(f => f.relativePath || f.sceneName || '').join(' | ');
-          const releaseName = matchingTorrents.length > 0 ? matchingTorrents[0].name : `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`;
+          const releaseName = matchingTorrents.length > 0
+            ? matchingTorrents[0].name
+            : (historySourceTitle || `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`);
           const isGerman = hasGermanLanguage(show, seasonFiles, releaseName);
           const arrLanguage = getLanguageSummary(seasonFiles);
 
