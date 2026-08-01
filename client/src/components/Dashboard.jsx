@@ -210,8 +210,8 @@ export default function Dashboard() {
         return false;
       }
       
-      // German Only filter
-      if (germanOnly && !item.isGerman) {
+      // German Only filter — show items that have at least one German audio track
+      if (germanOnly && !item.hasGerman) {
         return false;
       }
       // Tracker filter logic:
@@ -626,9 +626,14 @@ export default function Dashboard() {
                       <p style={{ fontSize: '0.85rem', margin: 0 }}><span style={{ color: 'var(--text-secondary)' }}>Instance:</span> {item.instanceName}</p>
                       <p style={{ fontSize: '0.85rem', margin: 0 }}>
                         <span style={{ color: 'var(--text-secondary)' }}>Lang:</span>{' '}
-                        <span style={{ color: item.isGerman ? '#4ade80' : 'var(--text-primary)', fontWeight: 500 }}>
-                          {item.arrLanguage && item.arrLanguage !== 'Unknown' ? item.arrLanguage : (item.isGerman ? 'German' : 'Unknown')}
+                        <span style={{ color: item.isGerman ? '#4ade80' : item.hasGerman ? '#fbbf24' : 'var(--text-primary)', fontWeight: 500 }}>
+                          {item.arrLanguage && item.arrLanguage !== 'Unknown' ? item.arrLanguage : 'Unknown'}
                         </span>
+                        {item.hasGerman && !item.isGerman && item.totalCount > 1 && (
+                          <span style={{ fontSize: '0.7rem', marginLeft: '6px', color: '#fbbf24' }}>
+                            ({item.germanCount}/{item.totalCount} DE)
+                          </span>
+                        )}
                       </p>
                       <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', wordBreak: 'break-all', margin: 0 }}>{item.path}</p>
                     </div>

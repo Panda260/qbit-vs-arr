@@ -84,96 +84,67 @@ async function getQbitTorrentFiles(url, cookie, hash) {
 }
 
 /**
- * Checks if the Radarr/Sonarr item or its files indicate German AUDIO language.
+ * Analyse the language metadata from Sonarr/Radarr episode/movie files.
+ * Returns a rich object used for both the isGerman flag and the display string.
  *
- * Priority order:
- *  1. File language metadata from *arr (authoritative – actual audio tracks)
- *  2. mediaInfo.audioLanguages string
- *  3. Release-name / file-name regex (fallback, with subtitle guard)
- *
- * The regex fallback explicitly excludes subtitle-only patterns like
- * "Ger.Eng.Sub" or "German.Subs" to avoid false positives on anime /
- * foreign-language releases that merely ship German subtitles.
+ * @returns {{
+ *   isGerman: boolean,        // true when EVERY file has German audio
+ *   hasGerman: boolean,       // true when at least one file has German audio
+ *   germanCount: number,      // how many files have German audio
+ *   totalCount: number,       // total files analysed
+ *   summary: string           // human-readable language string for UI
+ * }}
  */
-function hasGermanLanguage(arrItem, files, releaseName) {
-  // ── 1. Check Sonarr/Radarr file language metadata (most reliable) ──
+function getLanguageDetails(files) {
   let fileList = Array.isArray(files) ? files : [files].filter(Boolean);
-  let hasAnyLangMeta = false;
-
-  for (const f of fileList) {
-    const langs = f.languages || (f.language ? [f.language] : []);
-    if (langs.length > 0) {
-      hasAnyLangMeta = true;
-      for (const l of langs) {
-        if (l && l.name && /^german$/i.test(l.name)) return true;
-      }
-    }
+  if (fileList.length === 0) {
+    return { isGerman: false, hasGerman: false, germanCount: 0, totalCount: 0, summary: 'Unknown' };
   }
 
-  // ── 2. Check mediaInfo audioLanguages (e.g. "German / English") ──
-  for (const f of fileList) {
-    const mediaAudio = f.mediaInfo?.audioLanguages || f.audioLanguages || '';
-    if (mediaAudio) {
-      hasAnyLangMeta = true;
-      if (/german|\bger\b|\bdeu\b/i.test(mediaAudio)) return true;
-    }
-  }
+  let germanCount = 0;
+  const totalCount = fileList.length;
+  const langGroupCounts = {}; // "German, English" → count
 
-  // ── 3. If we already have reliable language metadata and it didn't
-  //       contain German, trust that — do NOT fall back to regex. ──
-  if (hasAnyLangMeta) return false;
-
-  // ── 4. Fallback: regex on release name / file names / arr metadata ──
-  //       Only runs when *arr returned zero language info.
-  //       Guards against subtitle-only patterns: "Ger.Sub", "German.Subs",
-  //       "Ger.Eng.Sub", etc.
-  const gerAudioRegex = /(?<!web-?)\bdl\b|dual[\s_.-]*language|german[\s_.-]*(?:ac3|dts|dd|eac3|aac|flac|atmos|truehd|audio|dub)/i;
-  const gerSimpleRegex = /\bgerman\b/i;
-  // "Ger" or "German" followed (within a few tokens) by "Sub" → subtitles only
-  const gerSubRegex = /\bger(?:man)?[\s._-]+(?:\w+[\s._-]+){0,2}subs?\b/i;
-
-  const candidates = [releaseName];
-  for (const f of fileList) {
-    if (f.relativePath) candidates.push(f.relativePath);
-    if (f.sceneName) candidates.push(f.sceneName);
-  }
-
-  for (const str of candidates) {
-    if (!str) continue;
-    // Explicit DL / Dual Language / German.AC3 etc. → definitely German audio
-    if (gerAudioRegex.test(str)) return true;
-    // "German" in name, but NOT near "Sub" → likely German audio
-    if (gerSimpleRegex.test(str) && !gerSubRegex.test(str)) return true;
-  }
-
-  return false;
-}
-
-/**
- * Returns a summary string of the languages reported by Radarr/Sonarr.
- * e.g., "German, English" or "9x German, English | 1x English"
- */
-function getLanguageSummary(files) {
-  let fileList = Array.isArray(files) ? files : [files].filter(Boolean);
-  if (fileList.length === 0) return "Unknown";
-  
-  const counts = {};
   for (const f of fileList) {
     const langs = f.languages || (f.language ? [f.language] : []);
     const langNames = langs.map(l => l.name).filter(Boolean);
-    const key = langNames.length > 0 ? langNames.join(', ') : "Unknown";
-    counts[key] = (counts[key] || 0) + 1;
+
+    // Check mediaInfo.audioLanguages as backup if no language metadata
+    if (langNames.length === 0) {
+      const mediaAudio = f.mediaInfo?.audioLanguages || f.audioLanguages || '';
+      if (mediaAudio) {
+        // mediaInfo.audioLanguages is a string like "German / English"
+        const parts = mediaAudio.split(/\s*\/\s*/).map(s => s.trim()).filter(Boolean);
+        langNames.push(...parts);
+      }
+    }
+
+    const key = langNames.length > 0 ? langNames.join(', ') : 'Unknown';
+    langGroupCounts[key] = (langGroupCounts[key] || 0) + 1;
+
+    // Check if this file has German audio
+    const fileHasGerman = langNames.some(n => /^german$/i.test(n));
+    if (fileHasGerman) germanCount++;
   }
-  
+
+  // Build summary string
   const summaries = [];
-  for (const [lang, count] of Object.entries(counts)) {
-    if (fileList.length === 1) {
+  for (const [lang, count] of Object.entries(langGroupCounts)) {
+    if (totalCount === 1) {
       summaries.push(lang);
     } else {
       summaries.push(`${count}x ${lang}`);
     }
   }
-  return summaries.join(' | ');
+  const summary = summaries.join(' | ');
+
+  return {
+    isGerman: germanCount === totalCount && totalCount > 0,
+    hasGerman: germanCount > 0,
+    germanCount,
+    totalCount,
+    summary,
+  };
 }
 
 /**
@@ -1053,8 +1024,7 @@ async function scanMedia(sendEvent) {
 
         const actualPath = movie.path;
         const releaseName = matchingTorrents.length > 0 ? matchingTorrents[0].name : (mf ? (mf.sceneName || mf.relativePath || movie.title) : movie.title);
-        const isGerman = hasGermanLanguage(movie, mf, releaseName);
-        const arrLanguage = getLanguageSummary(mf);
+        const langDetails = getLanguageDetails(mf);
 
         instanceResults.push({
           id: `radarr-${instance.name}-${movie.id}`,
@@ -1069,8 +1039,11 @@ async function scanMedia(sendEvent) {
           qbitTrackerHosts: Array.from(mediaTrackerHosts),
           inQbit: matchingTorrents.length > 0,
           matchMethod,
-          isGerman,
-          arrLanguage,
+          isGerman: langDetails.isGerman,
+          hasGerman: langDetails.hasGerman,
+          germanCount: langDetails.germanCount,
+          totalCount: langDetails.totalCount,
+          arrLanguage: langDetails.summary,
           matchedTorrents: matchingTorrents.map(t => ({ hash: t.hash, name: t.name, content_path: t.content_path, tags: t.tags, category: t.category }))
         });
       }
@@ -1246,8 +1219,7 @@ async function scanMedia(sendEvent) {
           const releaseName = matchingTorrents.length > 0
             ? matchingTorrents[0].name
             : (historySourceTitle || `${show.path.split(/[/\\]/).pop()} S${String(sNum).padStart(2, '0')}`);
-          const isGerman = hasGermanLanguage(show, seasonFiles, releaseName);
-          const arrLanguage = getLanguageSummary(seasonFiles);
+          const langDetails = getLanguageDetails(seasonFiles);
 
           instanceResults.push({
             id: `sonarr-${instance.name}-${show.id}-s${sNum}`,
@@ -1262,8 +1234,11 @@ async function scanMedia(sendEvent) {
             qbitTrackerHosts: Array.from(mediaTrackerHosts),
             inQbit: matchingTorrents.length > 0,
             matchMethod,
-            isGerman,
-            arrLanguage,
+            isGerman: langDetails.isGerman,
+            hasGerman: langDetails.hasGerman,
+            germanCount: langDetails.germanCount,
+            totalCount: langDetails.totalCount,
+            arrLanguage: langDetails.summary,
             matchedTorrents: matchingTorrents.map(t => ({ hash: t.hash, name: t.name, content_path: t.content_path, tags: t.tags, category: t.category }))
           });
         }
