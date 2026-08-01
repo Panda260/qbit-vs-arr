@@ -543,6 +543,22 @@ export default function Dashboard() {
                   </button>
                 )}
 
+                {/* German Only Toggle */}
+                <button
+                  onClick={() => setGermanOnly(g => !g)}
+                  title="Nur deutsche/DL Releases anzeigen"
+                  className="btn btn-sm"
+                  style={{
+                    fontSize: '0.75rem', padding: '0.4rem 0.8rem', whiteSpace: 'nowrap',
+                    background: germanOnly ? 'rgba(34,197,94,0.2)' : 'rgba(148,163,184,0.1)',
+                    color: germanOnly ? '#4ade80' : 'var(--text-secondary)',
+                    border: germanOnly ? '1px solid rgba(34,197,94,0.5)' : '1px solid rgba(148,163,184,0.35)',
+                    fontWeight: 600,
+                  }}
+                >
+                  GERMAN ONLY {germanOnly ? 'ON' : 'OFF'}
+                </button>
+
                 {/* Search All */}
                 {displayMode === 'missing' && (
                   <button onClick={searchAllCrossSeed} disabled={searchAllStatus !== null} className="btn btn-primary btn-sm flex items-center gap-2" style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', whiteSpace: 'nowrap' }}>
@@ -608,9 +624,12 @@ export default function Dashboard() {
                     </p>
                     <div className="flex gap-4 items-center mb-2 flex-wrap">
                       <p style={{ fontSize: '0.85rem', margin: 0 }}><span style={{ color: 'var(--text-secondary)' }}>Instance:</span> {item.instanceName}</p>
-                      {item.arrLanguage && item.arrLanguage !== 'Unknown' && (
-                        <p style={{ fontSize: '0.85rem', margin: 0 }}><span style={{ color: 'var(--text-secondary)' }}>Language:</span> {item.arrLanguage}</p>
-                      )}
+                      <p style={{ fontSize: '0.85rem', margin: 0 }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Lang:</span>{' '}
+                        <span style={{ color: item.isGerman ? '#4ade80' : 'var(--text-primary)', fontWeight: 500 }}>
+                          {item.arrLanguage && item.arrLanguage !== 'Unknown' ? item.arrLanguage : (item.isGerman ? 'German' : 'Unknown')}
+                        </span>
+                      </p>
                       <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', wordBreak: 'break-all', margin: 0 }}>{item.path}</p>
                     </div>
                     {displayMode === 'available' && showAllTags && item.inQbit && item.qbitTags.length > 0 && (
