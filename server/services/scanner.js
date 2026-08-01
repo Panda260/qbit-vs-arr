@@ -84,31 +84,68 @@ async function getQbitTorrentFiles(url, cookie, hash) {
 }
 
 /**
- * Checks if the Radarr/Sonarr item or its files indicate German language
+ * Checks if the Radarr/Sonarr item or its files indicate German AUDIO language.
+ *
+ * Priority order:
+ *  1. File language metadata from *arr (authoritative – actual audio tracks)
+ *  2. mediaInfo.audioLanguages string
+ *  3. Release-name / file-name regex (fallback, with subtitle guard)
+ *
+ * The regex fallback explicitly excludes subtitle-only patterns like
+ * "Ger.Eng.Sub" or "German.Subs" to avoid false positives on anime /
+ * foreign-language releases that merely ship German subtitles.
  */
 function hasGermanLanguage(arrItem, files, releaseName) {
-  const gerRegex = /german|\bger\b|\bdeu\b|(?<!web-?)\bdl\b|dual[\s_-]*language/i;
-  
-  if (arrItem) {
-    if (arrItem.originalLanguage?.name && /german|\bger\b|\bdeu\b/i.test(arrItem.originalLanguage.name)) return true;
-    const itemStr = [arrItem.title, arrItem.originalTitle, arrItem.folderName, arrItem.path].filter(Boolean).join(' ');
-    if (itemStr && gerRegex.test(itemStr)) return true;
-  }
-
+  // ── 1. Check Sonarr/Radarr file language metadata (most reliable) ──
   let fileList = Array.isArray(files) ? files : [files].filter(Boolean);
+  let hasAnyLangMeta = false;
+
   for (const f of fileList) {
     const langs = f.languages || (f.language ? [f.language] : []);
-    for (const l of langs) {
-      if (l && l.name && /german|\bger\b|\bdeu\b/i.test(l.name)) return true;
+    if (langs.length > 0) {
+      hasAnyLangMeta = true;
+      for (const l of langs) {
+        if (l && l.name && /^german$/i.test(l.name)) return true;
+      }
     }
-    const mediaAudio = f.mediaInfo?.audioLanguages || f.audioLanguages || '';
-    if (mediaAudio && gerRegex.test(mediaAudio)) return true;
-
-    const fileStr = [f.relativePath, f.sceneName].filter(Boolean).join(' ');
-    if (fileStr && gerRegex.test(fileStr)) return true;
   }
 
-  if (releaseName && gerRegex.test(releaseName)) return true;
+  // ── 2. Check mediaInfo audioLanguages (e.g. "German / English") ──
+  for (const f of fileList) {
+    const mediaAudio = f.mediaInfo?.audioLanguages || f.audioLanguages || '';
+    if (mediaAudio) {
+      hasAnyLangMeta = true;
+      if (/german|\bger\b|\bdeu\b/i.test(mediaAudio)) return true;
+    }
+  }
+
+  // ── 3. If we already have reliable language metadata and it didn't
+  //       contain German, trust that — do NOT fall back to regex. ──
+  if (hasAnyLangMeta) return false;
+
+  // ── 4. Fallback: regex on release name / file names / arr metadata ──
+  //       Only runs when *arr returned zero language info.
+  //       Guards against subtitle-only patterns: "Ger.Sub", "German.Subs",
+  //       "Ger.Eng.Sub", etc.
+  const gerAudioRegex = /(?<!web-?)\bdl\b|dual[\s_.-]*language|german[\s_.-]*(?:ac3|dts|dd|eac3|aac|flac|atmos|truehd|audio|dub)/i;
+  const gerSimpleRegex = /\bgerman\b/i;
+  // "Ger" or "German" followed (within a few tokens) by "Sub" → subtitles only
+  const gerSubRegex = /\bger(?:man)?[\s._-]+(?:\w+[\s._-]+){0,2}subs?\b/i;
+
+  const candidates = [releaseName];
+  for (const f of fileList) {
+    if (f.relativePath) candidates.push(f.relativePath);
+    if (f.sceneName) candidates.push(f.sceneName);
+  }
+
+  for (const str of candidates) {
+    if (!str) continue;
+    // Explicit DL / Dual Language / German.AC3 etc. → definitely German audio
+    if (gerAudioRegex.test(str)) return true;
+    // "German" in name, but NOT near "Sub" → likely German audio
+    if (gerSimpleRegex.test(str) && !gerSubRegex.test(str)) return true;
+  }
+
   return false;
 }
 
