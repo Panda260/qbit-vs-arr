@@ -87,15 +87,25 @@ async function getQbitTorrentFiles(url, cookie, hash) {
  * Checks if the Radarr/Sonarr item or its files indicate German language
  */
 function hasGermanLanguage(arrItem, files, releaseName) {
+  const gerRegex = /german|\bger\b|\bdeu\b|(?<!web-?)\bdl\b|dual[\s_-]*language/i;
+  
+  if (arrItem) {
+    if (arrItem.originalLanguage?.name && /german|\bger\b/i.test(arrItem.originalLanguage.name)) return true;
+    const itemStr = [arrItem.title, arrItem.originalTitle, arrItem.folderName, arrItem.path].filter(Boolean).join(' ');
+    if (itemStr && gerRegex.test(itemStr)) return true;
+  }
+
   let fileList = Array.isArray(files) ? files : [files].filter(Boolean);
   for (const f of fileList) {
     const langs = f.languages || (f.language ? [f.language] : []);
     for (const l of langs) {
       if (l && l.name && /german|\bger\b/i.test(l.name)) return true;
     }
-    if (f.relativePath && /german|\bger\b|(?<!web-?)\bdl\b|dual[\s_-]*language/i.test(f.relativePath)) return true;
+    const fileStr = [f.relativePath, f.sceneName].filter(Boolean).join(' ');
+    if (fileStr && gerRegex.test(fileStr)) return true;
   }
-  if (releaseName && /german|\bger\b|(?<!web-?)\bdl\b|dual[\s_-]*language/i.test(releaseName)) return true;
+
+  if (releaseName && gerRegex.test(releaseName)) return true;
   return false;
 }
 

@@ -235,7 +235,7 @@ export default function Dashboard() {
       // Display mode
       return displayMode === 'missing' ? !effectivelyInQbit : effectivelyInQbit;
     });
-  }, [mediaItems, displayMode, filterInstance, settings.ignored_keywords, selectedTrackers, bypassIgnore]);
+  }, [mediaItems, displayMode, filterInstance, settings.ignored_keywords, selectedTrackers, bypassIgnore, germanOnly]);
 
   // Count how many items the ignore list hides (for the badge)
   const ignoredCount = React.useMemo(() => {
@@ -459,7 +459,7 @@ export default function Dashboard() {
                     outline: germanOnly ? '1px solid rgba(34,197,94,0.4)' : '1px solid rgba(148,163,184,0.3)',
                   }}
                 >
-                  🇩🇪 GERMAN ONLY {germanOnly ? 'ON' : 'OFF'}
+                  GERMAN ONLY {germanOnly ? 'ON' : 'OFF'}
                 </button>
               </div>
               <p className="mb-3" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -600,7 +600,7 @@ export default function Dashboard() {
                             🚫 Blocked by: {item.matchedKeywords.join(', ')}
                           </span>
                         )}
-                        {displayMode === 'seeding' && item.inQbit && matchBadge(item.matchMethod)}
+                        {displayMode === 'available' && item.inQbit && matchBadge(item.matchMethod)}
                       </div>
                     </div>
                     <p style={{ fontSize: '0.95rem', color: '#60a5fa', fontWeight: 500, marginBottom: '0.5rem', wordBreak: 'break-all' }}>
@@ -613,7 +613,7 @@ export default function Dashboard() {
                       )}
                       <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', wordBreak: 'break-all', margin: 0 }}>{item.path}</p>
                     </div>
-                    {displayMode === 'seeding' && showAllTags && item.inQbit && item.qbitTags.length > 0 && (
+                    {displayMode === 'available' && showAllTags && item.inQbit && item.qbitTags.length > 0 && (
                       <div className="flex gap-2 flex-wrap animate-fade-in">
                         {item.qbitTags.map(t => <span key={t} className="tag-badge" style={{ fontSize: '0.65rem', padding: '1px 6px', cursor: 'default' }}>{t}</span>)}
                       </div>
