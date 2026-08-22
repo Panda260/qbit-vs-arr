@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { formatEta } = require('./formatEta');
 
 let searchAllState = {
   isRunning: false,
@@ -7,7 +8,8 @@ let searchAllState = {
   currentItem: '',
   cancelRequested: false,
   startTime: null,
-  eta: null
+  eta: null,
+  etaSeconds: null
 };
 
 function getSearchAllStatus() {
@@ -16,7 +18,9 @@ function getSearchAllStatus() {
     if (searchAllState.current > 0) {
       const msPerItem = elapsedMs / searchAllState.current;
       const remainingItems = searchAllState.total - searchAllState.current;
-      searchAllState.eta = Math.round((msPerItem * remainingItems) / 1000); // ETA in seconds
+      const etaSeconds = Math.round((msPerItem * remainingItems) / 1000);
+      searchAllState.etaSeconds = etaSeconds; // raw seconds for the client
+      searchAllState.eta = formatEta(etaSeconds); // formatted string, e.g. "6m 34s"
     }
   }
   return searchAllState;
@@ -47,7 +51,8 @@ async function startSearchAll(paths, delayMs, url, apiKey) {
     currentItem: '',
     cancelRequested: false,
     startTime: Date.now(),
-    eta: null
+    eta: null,
+    etaSeconds: null
   };
 
   // Run in background without awaiting in the router

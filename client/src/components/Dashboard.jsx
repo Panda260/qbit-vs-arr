@@ -576,7 +576,7 @@ export default function Dashboard() {
                     <span style={{ fontSize: '0.85rem' }}>Searching cross-seed: <strong>{searchAllStatus.currentItem}</strong></span>
                     {searchAllStatus.eta !== null && (
                       <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginLeft: '1rem' }}>
-                        ETA: {searchAllStatus.eta}s
+                        ETA: {searchAllStatus.eta}
                       </span>
                     )}
                   </div>

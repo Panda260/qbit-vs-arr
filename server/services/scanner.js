@@ -3,6 +3,7 @@ const fs = require('fs');
 const nodePath = require('path');
 const crypto = require('crypto');
 const db = require('./db');
+const { formatEta } = require('./formatEta');
 
 // ---------------------------------------------------------------------------
 // Resilient HTTP helper — retries on 5xx, 429, and network errors
@@ -272,9 +273,7 @@ async function buildInodeIndex(torrents, pathFrom, pathTo, sendEvent) {
     const avgTimePerItem = elapsed / currentCount;
     const remainingItems = torrents.length - currentCount;
     const etaSeconds = Math.round((remainingItems * avgTimePerItem) / 1000);
-    const etaFormatted = etaSeconds > 60 
-      ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s` 
-      : `${etaSeconds}s`;
+    const etaFormatted = formatEta(etaSeconds);
 
     if (sendEvent) sendEvent('progress', { global: true, step: `Indexing Hardlinks (${currentCount}/${torrents.length}) - noch ca. ${etaFormatted}...`, progress: pct });
     
@@ -393,15 +392,13 @@ async function buildFastHashIndex(torrents, pathFrom, pathTo, sendEvent) {
     const avgTimePerItem = elapsed / currentCount;
     const remainingItems = torrents.length - currentCount;
     const etaSeconds = Math.round((remainingItems * avgTimePerItem) / 1000);
-    const etaFormatted = etaSeconds > 60 
-      ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s` 
-      : `${etaSeconds}s`;
+    const etaFormatted = formatEta(etaSeconds);
 
     if (sendEvent) {
-      sendEvent('progress', { 
-        global: true, 
-        step: `Calculating Hashes (${currentCount}/${torrents.length}) - noch ca. ${etaFormatted}...`, 
-        progress: pct 
+      sendEvent('progress', {
+        global: true,
+        step: `Calculating Hashes (${currentCount}/${torrents.length}) - noch ca. ${etaFormatted}...`,
+        progress: pct
       });
     }
     
@@ -915,7 +912,7 @@ async function scanMedia(sendEvent) {
           const avgTime = elapsed / done;
           const remaining = movies.length - done;
           const etaSec = Math.round((remaining * avgTime) / 1000);
-          const eta = etaSec > 60 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : `${etaSec}s`;
+          const eta = formatEta(etaSec);
           const pct = Math.floor((done / movies.length) * 40);
           instanceSendEvent(`Fetching history (${done}/${movies.length}) - noch ca. ${eta}`, Math.min(40, pct));
 
@@ -1090,7 +1087,7 @@ async function scanMedia(sendEvent) {
           const avgTime = elapsed / done;
           const remaining = series.length - done;
           const etaSec = Math.round((remaining * avgTime) / 1000);
-          const eta = etaSec > 60 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : `${etaSec}s`;
+          const eta = formatEta(etaSec);
           const pct = Math.floor((done / series.length) * 40);
           instanceSendEvent(`Fetching series data (${done}/${series.length}) - noch ca. ${eta}`, Math.min(40, pct));
 
