@@ -2,6 +2,16 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Play, Copy, ExternalLink, Check, Search, Activity, RefreshCw, XCircle, CheckCircle, Plus, X, Filter, Radio, AlertCircle } from 'lucide-react';
 import axios from 'axios';
 
+// Cookie helpers — persist UI toggle state across sessions
+function setCookie(name, value, days = 365) {
+  const expires = new Date(Date.now() + days * 864e5).toUTCString();
+  document.cookie = `${name}=${value}; expires=${expires}; path=/; SameSite=Lax`;
+}
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export default function Dashboard() {
   const [scanState, setScanState]     = useState({ isScanning: false, globalStep: 'Ready to scan', globalProgress: 0, instances: {} });
   const [lastScanDate, setLastScanDate] = useState(null);
@@ -19,8 +29,8 @@ export default function Dashboard() {
 
   const [displayMode, setDisplayMode]     = useState('missing');
   const [showAllTags, setShowAllTags]     = useState(true);
-  const [bypassIgnore, setBypassIgnore]   = useState(false);
-  const [germanOnly, setGermanOnly]       = useState(false);
+  const [bypassIgnore, setBypassIgnore]   = useState(() => getCookie('bypassIgnore') === 'true');
+  const [germanOnly, setGermanOnly]       = useState(() => getCookie('germanOnly') === 'true');
   const [copiedId, setCopiedId]           = useState(null);
   const [settings, setSettings]           = useState({ ignored_keywords: [] });
   const [instances, setInstances]         = useState([]);
@@ -38,6 +48,10 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem('selectedTrackers', JSON.stringify(selectedTrackers));
   }, [selectedTrackers]);
+
+  // Persist UI toggles to cookies
+  useEffect(() => { setCookie('bypassIgnore', String(bypassIgnore)); }, [bypassIgnore]);
+  useEffect(() => { setCookie('germanOnly', String(germanOnly)); }, [germanOnly]);
 
   useEffect(() => {
     fetchSettings();
