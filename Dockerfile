@@ -1,5 +1,5 @@
 # Build frontend
-FROM node:20-alpine AS client-builder
+FROM node:24-alpine AS client-builder
 WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY client/ ./
 RUN npm run build
 
 # Build backend
-FROM node:20-alpine
+FROM node:24-alpine
 RUN apk add --no-cache python3 make g++
 WORKDIR /app/server
 
